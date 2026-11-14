@@ -40,6 +40,8 @@ func Defaults() Config {
 			ForceUpstreamStreaming:      true,
 			MaxBufferedResponseBytes:    512 << 20,
 			MaxBufferedRequestBytes:     128 << 20,
+			MaxOrphanStreamBytes:        128 << 20,
+			MaxOrphanStreamsPerKey:      4,
 			MinClientReadBytesPerSecond: 64 << 10,
 			MaxTokensCap:                int64(filters.RequestMaxTokensCap),
 			Concurrency: Concurrency{

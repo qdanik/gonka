@@ -4,10 +4,53 @@ package api
 // the verdict a finished request is logged under, and the trigger a capture file is named for. Declared
 // here so a rename reaches the log, the tests and the docs through the compiler.
 
-// Headers a client can read off any chat reply.
+// Headers a client can read off any chat reply, and the ones a stream resume uses. See README.md, "Resuming a stream".
 const (
-	EscrowHeader    = "X-Devshard-ID"
-	RequestIDHeader = "X-Request-Id"
+	EscrowHeader       = "X-Devshard-ID"
+	RequestIDHeader    = "X-Request-Id"
+	StreamIDHeader     = "X-Devshard-Stream-ID"
+	ResumeHeader       = "X-Devshard-Resume"
+	ResumeFromHeader   = "X-Devshard-Resume-From"
+	ResumeSourceHeader = "X-Devshard-Resume-Source"
+)
+
+const (
+	contentTypeEventStream = "text/event-stream"
+	noStreamID             = ""
+	resumeCursorSeparator  = "/"
+	resumeAbsent           = ""
+)
+
+// Where a resumed stream's events come from, as the Resume-Source header and the resume counter name them, and what a resume that was refused is counted as.
+const (
+	resumeSourceLive          = "live"
+	resumeSourceCache         = "cache"
+	resumeResultUnavailable   = "unavailable"
+	resumeResultInvalidCursor = "invalid_cursor"
+)
+
+// What became of a stream whose client left, as the orphan counter names it.
+const (
+	orphanStored        = "stored"
+	orphanAdopted       = "adopted"
+	orphanFailed        = "failed"
+	orphanDroppedBudget = "dropped_budget"
+	orphanDroppedCap    = "dropped_cap"
+)
+
+// The error codes a refused resume is answered with.
+const (
+	errorCodeInvalidResumeCursor = "invalid_resume_cursor"
+	errorCodeResumeUnavailable   = "resume_unavailable"
+)
+
+type streamLogState int
+
+// A stream log is live while its race writes to it, finished once the reply is complete, and failed when the race or a bound ended it.
+const (
+	streamLive streamLogState = iota
+	streamFinished
+	streamFailed
 )
 
 // How a finished request was delivered. A stream commits 200 on its first byte, so this is the only
@@ -20,10 +63,11 @@ const (
 
 // The cache's own refusals, beside the ones filters can name from the body alone.
 const (
-	cacheRefusedTooLarge    = "too_large"
-	cacheRefusedWriteFailed = "write_failed"
-	cacheRefusedRaceFailed  = "race_failed"
-	cacheRefusedNoEscrow    = "no_escrow"
+	cacheRefusedTooLarge      = "too_large"
+	cacheRefusedWriteFailed   = "write_failed"
+	cacheRefusedRaceFailed    = "race_failed"
+	cacheRefusedNoEscrow      = "no_escrow"
+	cacheRefusedOrphanDropped = "orphan_dropped"
 )
 
 const cacheResultStored = "stored"

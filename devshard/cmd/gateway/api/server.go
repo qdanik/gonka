@@ -220,6 +220,7 @@ type Deps struct {
 	RequestBodies           *BufferBudget
 	Rejections              LimitRejections
 	CacheResults            CacheResults
+	StreamEvents            StreamEvents
 	StatsTokenizerFallbacks StatsTokenizerFallbacks
 	Journal                 RequestJournal
 	StorageDir              string
@@ -247,6 +248,7 @@ type Server struct {
 	telemetry    Telemetry
 	rejections   LimitRejections
 	cacheResults CacheResults
+	streamEvents StreamEvents
 	events       RequestJournal
 	storageDir   string
 	version      string
@@ -254,6 +256,7 @@ type Server struct {
 	requestIDs   func() string
 	buffers      *BufferBudget
 	cache        *responseCache
+	streams      *streamIndex
 	capture      *requestCapture
 
 	stopTokenVocabulary     func(model string) int
@@ -320,6 +323,7 @@ func New(deps Deps) (*Server, error) {
 		telemetry:    deps.Telemetry,
 		rejections:   deps.Rejections,
 		cacheResults: deps.CacheResults,
+		streamEvents: deps.StreamEvents,
 		events:       deps.Journal,
 		storageDir:   deps.StorageDir,
 		version:      deps.Version,
@@ -335,6 +339,7 @@ func New(deps Deps) (*Server, error) {
 	}
 	configuration := deps.Config.Load()
 	server.cache = newResponseCache(configuration.Cache.ChatCacheMaxBytes)
+	server.streams = newStreamIndex(configuration.Limits.MaxOrphanStreamBytes, int(configuration.Limits.MaxOrphanStreamsPerKey))
 	server.promptCounts = newPromptCountGate(configuration.Server.MaxConcurrentPromptCounts)
 	server.statsTokenizerEnabled = configuration.Server.StatsTokenizerEnabled
 	capture, err := newRequestCapture(configuration.Capture, deps.StorageDir, server.now)

@@ -42,6 +42,17 @@ type clientStream struct {
 	pendingEvent      bool
 	replayRefusedBy   error
 	answeredHostError *engine.HostApplicationError
+
+	log        *streamLog
+	rewriteErr error
+
+	handoff  sync.Mutex
+	settle   func(engine.RaceOutcome)
+	final    engine.RaceOutcome
+	reported bool
+	finished bool
+	orphaned bool
+	settled  bool
 }
 
 func newClientStream(w http.ResponseWriter, requestID string, streaming, usage bool, logprobs filters.LogprobIntent, promptTokens uint64, budget *BufferBudget) *clientStream {
@@ -82,15 +93,31 @@ func (c *clientStream) Write(chunk []byte) (int, error) {
 		}
 		return written, nil
 	}
-	c.beginLocked("text/event-stream")
+	return c.writeStreamLocked(chunk)
+}
+
+func (c *clientStream) writeStreamLocked(chunk []byte) (int, error) {
+	c.beginLocked(contentTypeEventStream)
 	rewritten, err := c.rewriter.Write(chunk)
 	if err != nil {
+		c.rewriteErr = err
 		return 0, refuse(err)
 	}
 	if err := c.emitHostEventsLocked(rewritten); err != nil {
 		return 0, err
 	}
 	return len(chunk), nil
+}
+
+// WriteDeparted keeps the winner's bytes flowing into the log once the client has left. See README.md, "Resuming a stream".
+func (c *clientStream) WriteDeparted(chunk []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.log == nil {
+		return
+	}
+	c.log.detachSocket()
+	_, _ = c.writeStreamLocked(chunk)
 }
 
 func (c *clientStream) foldLocked(chunk []byte) (int, error) {
@@ -119,7 +146,7 @@ func (c *clientStream) Flush() {
 }
 
 func (c *clientStream) flushLocked() {
-	if c.started && !c.closed {
+	if c.started && !c.closed && c.log.socketAttached() {
 		_ = c.controller.Flush()
 	}
 }
@@ -132,16 +159,7 @@ func (c *clientStream) Close() error {
 	}
 	defer func() { c.closed = true }()
 	if c.streaming {
-		tailErr := c.flushTailLocked()
-		if c.answeredHostError != nil {
-			if _, err := c.emitLocked(errorEvent(c.answeredHostError)); err != nil {
-				return err
-			}
-		}
-		if err := c.terminateLocked(); err != nil {
-			return err
-		}
-		return tailErr
+		return c.closeStreamLocked()
 	}
 	if c.overBudget {
 		writeError(c.writer, http.StatusServiceUnavailable, ErrResponseBufferFull.Error())
@@ -162,7 +180,23 @@ func (c *clientStream) Close() error {
 	return err
 }
 
+func (c *clientStream) closeStreamLocked() error {
+	tailErr := c.flushTailLocked()
+	if c.answeredHostError != nil {
+		if _, err := c.emitLocked(errorEvent(c.answeredHostError)); err != nil {
+			return err
+		}
+	}
+	if err := c.terminateLocked(); err != nil {
+		return err
+	}
+	return tailErr
+}
+
 func (c *clientStream) discard() {
+	if c.handedOff() {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
@@ -190,6 +224,10 @@ func (c *clientStream) Fail(cause error) error {
 		return nil
 	}
 	defer func() { c.closed = true }()
+	return c.failStreamLocked(cause)
+}
+
+func (c *clientStream) failStreamLocked(cause error) error {
 	tailErr := c.flushTailLocked()
 	if _, err := c.emitLocked(errorEvent(cause)); err != nil {
 		return err
@@ -206,6 +244,7 @@ func (c *clientStream) Fail(cause error) error {
 
 func (c *clientStream) flushTailLocked() error {
 	tail, err := c.rewriter.Close()
+	c.rewriteErr = cmp.Or(c.rewriteErr, err)
 	if writeErr := c.emitHostEventsLocked(tail); writeErr != nil {
 		return writeErr
 	}
@@ -241,16 +280,24 @@ func (c *clientStream) emitLocked(events []byte) (int, error) {
 	c.beginLocked("text/event-stream")
 	// A host's last event without its blank line would otherwise have the next one glued onto it.
 	if c.pendingEvent {
-		separator, err := c.writer.Write(sseEventSeparator)
-		c.written += int64(separator)
-		if err != nil {
+		if _, err := c.sendLocked(sseEventSeparator); err != nil {
 			return 0, err
 		}
 	}
 	c.terminated = c.terminated || filters.HasSSEDone(events)
 	c.pendingEvent = !filters.SSEEventTerminated(events)
-	written, err := c.writer.Write(events)
+	return c.sendLocked(events)
+}
+
+func (c *clientStream) sendLocked(data []byte) (int, error) {
+	if !c.log.append(data) {
+		return len(data), nil
+	}
+	written, err := c.writer.Write(data)
 	c.written += int64(written)
+	if err != nil {
+		c.log.detachSocket()
+	}
 	return written, err
 }
 
@@ -320,7 +367,10 @@ func (c *clientStream) beginStatusLocked(contentType string, status int) {
 	if c.started {
 		return
 	}
+	c.started = true
+	if !c.log.socketAttached() {
+		return
+	}
 	writeChatHeaders(c.writer.Header(), c.requestID, "", contentType, c.streaming)
 	c.writer.WriteHeader(status)
-	c.started = true
 }

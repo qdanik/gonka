@@ -165,6 +165,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"poc_max_concurrent_requests_per_10000_weight above the request cap", func(c *Config) { c.Limits.Concurrency.PoCRequestsPer10000Weight = maxConcurrentRequests + 1 }, "poc_max_concurrent_requests_per_10000_weight"},
 		{"max_input_tokens_in_flight negative", func(c *Config) { c.Limits.MaxInputTokensInFlight = -1 }, "max_input_tokens_in_flight"},
 		{"max_buffered_request_bytes below one body", func(c *Config) { c.Limits.MaxBufferedRequestBytes = filters.MaxBodyBytes - 1 }, "max_buffered_request_bytes"},
+		{"max_orphan_stream_bytes negative", func(c *Config) { c.Limits.MaxOrphanStreamBytes = -1 }, "max_orphan_stream_bytes"},
+		{"max_orphan_streams_per_key below one", func(c *Config) { c.Limits.MaxOrphanStreamsPerKey = 0 }, "max_orphan_streams_per_key"},
 		{"admission_queue_wait_ms negative", func(c *Config) { c.Limits.AdmissionQueueWaitMS = -1 }, "admission_queue_wait_ms"},
 		{"min_client_read_bytes_per_second too low", func(c *Config) { c.Limits.MinClientReadBytesPerSecond = 0 }, "min_client_read_bytes_per_second"},
 		{"min_client_read_bytes_per_second too high", func(c *Config) { c.Limits.MinClientReadBytesPerSecond = maxMinClientReadBytesPerSecond + 1 }, "min_client_read_bytes_per_second"},

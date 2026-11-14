@@ -92,6 +92,8 @@ type Limits struct {
 	LogprobsOptimization        *bool
 	MaxBufferedResponseBytes    int64
 	MaxBufferedRequestBytes     int64
+	MaxOrphanStreamBytes        int64
+	MaxOrphanStreamsPerKey      int64
 	MinClientReadBytesPerSecond int64
 	MaxTokensCap                int64
 	FallbackMaxModelLen         int64

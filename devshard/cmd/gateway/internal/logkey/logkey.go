@@ -103,6 +103,8 @@ const (
 	InputTokensSource = "input_tokens_source"
 	OutputTokens      = "output_tokens"
 	Bytes             = "bytes"
+	Resumed           = "resumed"
+	ResumeOf          = "resume_of"
 	Terminated        = "terminated"
 	DurationMS        = "duration_ms"
 	DeliverError      = "deliver_error"

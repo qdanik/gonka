@@ -16,6 +16,8 @@ type Tunables struct {
 	LogprobsOptimization                   *bool    `json:"logprobs_optimization,omitempty"`
 	MaxBufferedResponseBytes               *int64   `json:"max_buffered_response_bytes,omitempty"`
 	MaxBufferedRequestBytes                *int64   `json:"max_buffered_request_bytes,omitempty"`
+	MaxOrphanStreamBytes                   *int64   `json:"max_orphan_stream_bytes,omitempty"`
+	MaxOrphanStreamsPerKey                 *int64   `json:"max_orphan_streams_per_key,omitempty"`
 	MinClientReadBytesPerSecond            *int64   `json:"min_client_read_bytes_per_second,omitempty"`
 	WarmNewEscrows                         *bool    `json:"warm_new_escrows,omitempty"`
 	Disabled                               *bool    `json:"disabled,omitempty"`
