@@ -623,43 +623,26 @@ func TestAnAcknowledgedCommitmentIsInTheMainDatabaseFile(t *testing.T) {
 }
 
 // Test flow:
-//  1. Write into the overrides row a document in the shape older builds saved: the two retired routing keys beside a tunable.
-//  2. Load the overrides, then build a configuration from them.
-//  3. Assert the participants arrive under `participants` and the configuration routes with the same trust and unthrottled lists, and the tunable survives.
-//  4. Save the loaded overrides and read the stored document back, asserting it now holds `participants` and neither retired key.
-func TestAStoredDocumentWithTheRetiredRoutingKeysBootsWithTheSameRouting(t *testing.T) {
+//  1. Write into the overrides row a document in the shape older builds saved: both retired routing keys beside a tunable.
+//  2. Load the overrides.
+//  3. Assert the load succeeds, the tunable is kept and `Participants` is nil, the retired keys being ignored.
+func TestAStoredDocumentWithTheRetiredRoutingKeysLoadsWithoutThem(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
-	legacy := `{"participant_allowlist":["gonka1scskt"],"unthrottled_participants":["gonka1f0u3y"],"default_max_tokens":321}`
-	if _, err := testStore.db.ExecContext(ctx, `INSERT INTO config_overrides (id, overrides_json, updated_at) VALUES (1, ?, datetime('now'))`, legacy); err != nil {
-		t.Fatalf("writing the legacy document: %v", err)
+	stored := `{"participant_allowlist":["gonka1scskt"],"unthrottled_participants":["gonka1f0u3y"],"default_max_tokens":321}`
+	if _, err := testStore.db.ExecContext(ctx, `INSERT INTO config_overrides (id, overrides_json, updated_at) VALUES (1, ?, datetime('now'))`, stored); err != nil {
+		t.Fatalf("writing the stored document: %v", err)
 	}
 
 	loaded, err := testStore.LoadOverrides(ctx)
+
 	if err != nil {
 		t.Fatalf("LoadOverrides(): %v", err)
-	}
-	built, err := config.Build(env.Values{}, loaded)
-	if err != nil {
-		t.Fatalf("Build(): %v", err)
-	}
-
-	participants := built.Scheduler.Participants
-	if !slices.Equal(participants.Trust, []string{"gonka1scskt"}) || !slices.Equal(participants.Unthrottled, []string{"gonka1f0u3y"}) || len(participants.Shadow) != 0 {
-		t.Errorf("participants = %+v, want the retired lists as trust and unthrottled", participants)
 	}
 	if loaded.DefaultMaxTokens == nil || *loaded.DefaultMaxTokens != 321 {
 		t.Errorf("default_max_tokens = %v, want 321 kept", loaded.DefaultMaxTokens)
 	}
-
-	if err := testStore.SaveOverrides(ctx, loaded); err != nil {
-		t.Fatalf("SaveOverrides(): %v", err)
-	}
-	var rewritten string
-	if err := testStore.db.QueryRowContext(ctx, `SELECT overrides_json FROM config_overrides WHERE id = 1`).Scan(&rewritten); err != nil {
-		t.Fatalf("reading the rewritten document: %v", err)
-	}
-	if !strings.Contains(rewritten, `"participants"`) || strings.Contains(rewritten, "participant_allowlist") || strings.Contains(rewritten, "unthrottled_participants") {
-		t.Errorf("rewritten document = %s, want participants and neither retired key", rewritten)
+	if loaded.Participants != nil {
+		t.Errorf("participants = %+v, want nil: the retired keys are ignored", loaded.Participants)
 	}
 }

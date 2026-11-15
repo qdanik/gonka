@@ -84,51 +84,6 @@ func TestShadowEntryMustLookLikeAnAddress(t *testing.T) {
 }
 
 // Test flow:
-//  1. Parse a stored document written before `participants` existed, carrying both retired keys beside a tunable.
-//  2. Assert the lists arrive as `Participants.Trust` and `Participants.Unthrottled` and the tunable is kept.
-//  3. Build a config from it and assert the scheduler lists equal the retired ones.
-func TestStoredLegacyKeysBecomeParticipants(t *testing.T) {
-	t.Parallel()
-	stored := []byte(`{"participant_allowlist":["gonka1scskt"],"unthrottled_participants":["gonka1f0u3y"],"max_concurrent_requests":7}`)
-
-	overrides, err := ParseStoredOverrides(stored)
-	if err != nil {
-		t.Fatalf("ParseStoredOverrides: %v", err)
-	}
-	built, err := Build(env.Values{}, overrides)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-
-	if overrides.MaxConcurrentRequests == nil || *overrides.MaxConcurrentRequests != 7 {
-		t.Errorf("max_concurrent_requests = %v, want 7 kept", overrides.MaxConcurrentRequests)
-	}
-	if !slices.Equal(built.Scheduler.Participants.Trust, []string{"gonka1scskt"}) || !slices.Equal(built.Scheduler.Participants.Unthrottled, []string{"gonka1f0u3y"}) {
-		t.Errorf("participants = %+v, want the retired lists as trust and unthrottled", built.Scheduler.Participants)
-	}
-	if len(built.Scheduler.Participants.Shadow) != 0 {
-		t.Errorf("shadow = %v, want empty", built.Scheduler.Participants.Shadow)
-	}
-}
-
-// Test flow:
-//  1. Parse a stored document carrying `participants.trust` and the retired `participant_allowlist`.
-//  2. Assert the list under `participants` wins and the retired unthrottled key still folds in.
-func TestStoredParticipantsWinOverRetiredKeys(t *testing.T) {
-	t.Parallel()
-	stored := []byte(`{"participants":{"trust":["gonka1new"]},"participant_allowlist":["gonka1old"],"unthrottled_participants":["gonka1f0u3y"]}`)
-
-	overrides, err := ParseStoredOverrides(stored)
-	if err != nil {
-		t.Fatalf("ParseStoredOverrides: %v", err)
-	}
-
-	if !slices.Equal(*overrides.Participants.Trust, []string{"gonka1new"}) || !slices.Equal(*overrides.Participants.Unthrottled, []string{"gonka1f0u3y"}) {
-		t.Errorf("participants = %v / %v, want the new trust list and the folded unthrottled one", *overrides.Participants.Trust, *overrides.Participants.Unthrottled)
-	}
-}
-
-// Test flow:
 //  1. Parse an admin document naming a retired key.
 //  2. Assert `ParseOverrides` refuses it, as the admin API accepts only `participants`.
 func TestAdminDocumentRefusesTheRetiredKeys(t *testing.T) {

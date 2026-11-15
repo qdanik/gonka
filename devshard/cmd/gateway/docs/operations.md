@@ -760,7 +760,7 @@ A `POST` merges inside `participants`, one sub-key at a time: a sub-key it names
 
 An entry must look like an address. The shape is checked when the settings document is built, so a short host label pasted from a log or a Grafana `host=` tag is refused at the settings call rather than narrowing dispatch to nobody. A participant named in both `shadow` and `trust`, or in both `shadow` and `unthrottled`, is refused with an error naming it; `trust` and `unthrottled` may name the same participant.
 
-The retired keys `participant_allowlist` and `unthrottled_participants` are refused by the admin API. A document an earlier build stored with them is read at boot as `participants.trust` and `participants.unthrottled`, so routing is unchanged, and the first settings write stores the new key.
+The retired keys `participant_allowlist` and `unthrottled_participants` are refused by the admin API. A stored settings document that still holds either boots: the keys are ignored, and the next settings write drops them. Set `participants` yourself after the upgrade: until then `trust` is empty and routing is open to every participant.
 
 The lists restrain nothing but routing. Host pings, catch-up, finalize, the retirement flush, the timeout sweep and the warmup prober all address the group the chain gave the escrow. See routing.md, "Paths that ignore the routing lists, by design".
 

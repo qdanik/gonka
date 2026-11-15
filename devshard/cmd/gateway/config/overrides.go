@@ -48,17 +48,13 @@ func ParseOverrides(raw []byte) (Overrides, error) {
 	return overrides, nil
 }
 
-// ParseStoredOverrides reads back what an earlier build wrote, folding its two retired routing keys into `participants`. See README.md, "Overrides".
+// ParseStoredOverrides reads back what an earlier build wrote. See README.md, "Overrides".
 func ParseStoredOverrides(raw []byte) (Overrides, error) {
 	var overrides Overrides
 	if err := json.Unmarshal(raw, &overrides); err != nil {
 		return Overrides{}, fmt.Errorf("parsing stored overrides: %w", err)
 	}
-	var retired retiredParticipantKeys
-	if err := json.Unmarshal(raw, &retired); err != nil {
-		return Overrides{}, fmt.Errorf("parsing stored overrides: %w", err)
-	}
-	return retired.foldInto(overrides), nil
+	return overrides, nil
 }
 
 func (o Overrides) EncodeOverrides() ([]byte, error) {
