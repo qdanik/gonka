@@ -1,6 +1,10 @@
 package scheduler
 
-import "testing"
+import (
+	"testing"
+
+	"devshard/cmd/gateway/config"
+)
 
 // laddered builds an `availability` with every gate open unless `closed` shuts one.
 func laddered(closed func(*availability)) availability {
@@ -116,7 +120,7 @@ func TestUnthrottledStopsAtTheGatesThatProtectTheNonce(t *testing.T) {
 //  3. Assert an escrow held by a stranger is not.
 func TestEscrowHoldingOnlyAnUnthrottledParticipantIsReachable(t *testing.T) {
 	t.Parallel()
-	reachable := reachableByAllowlist([]string{"nobody-holds-this"}, []string{hostA})
+	reachable := reachableByAllowlist(config.Participants{Trust: []string{"nobody-holds-this"}, Unthrottled: []string{hostA}})
 
 	if !reachable(Escrow{Session: &fakeSession{slots: soleHost, participants: soleHost}}) {
 		t.Error("an escrow whose group holds an unthrottled participant must stay reachable")

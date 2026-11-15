@@ -1,0 +1,24 @@
+# `shadow` — probing the participants that serve no client
+
+A participant named in `participants.shadow` receives inference probes and never a client request. This package sends those probes and settles the nonces they are sent on.
+
+## What it owns
+
+- **`Runner`** — satisfies `scheduler.ShadowProber`. `Params` builds the probe's dispatch params: a body of 64 input tokens counted by the gateway's tokenizer for the model (a prompt of 64 bytes while the tokenizer is not loaded), `max_tokens` 64, streamed. `Probe` takes the committed nonce the scheduler spent on a shadow host, takes its own hold on the escrow, gives the scheduler's hold back, and sends on a goroutine of its own.
+- **The settlement of that nonce.** A probe that fails is voted as a timeout through `warmup.Voter`, the same voter the warmup prober uses (refused before a receipt, execution after). Whatever the answer, the runner arms the session's quiet settle so the probe's receipt and Finish ride the next diff, and records the nonce in the ledger under `accounting.TerminalShadowProbe`.
+- **The result.** One `Result` per probe goes to `Outcomes`, which `app` binds to the shadow metrics and the journal's `shadow probe served` / `shadow probe failed` line: outcome, total time, the time to the first streamed byte when one arrived, and the output tokens the host reported.
+
+## What it does not own
+
+The choice to probe. `scheduler` decides that a nonce bound to a shadow host is spent on a probe (`match.go`, `firstBlock`), and does not wait for the probe: the client request that was queued is neither served by it nor delayed by it. See [`docs/routing.md`](../docs/routing.md), "Shadow participants".
+
+## Boundaries
+
+- **The probe is the gateway's own request.** It never touches the limiter or the host-health tracker, so it leaves every rate that drives routing alone, and the ledger keeps it off both sides of every serving ratio.
+- **`Bind` is late.** The runner is built before the registry and the vote path exist, as the warmup prober is; a runner never bound refuses every probe. A probe refused after its nonce was committed, because the escrow could not be held again, leaves that nonce pending exactly as a ghost burn does, and the scheduler records it as the burn `participant_outside_allowlist`.
+- **A probe ends with the gateway.** Its send and its vote derive from the context passed to `Bind`.
+- **`InputLength` is the body's byte length**, which is what a host verifies, whatever the tokenizer counted.
+
+## Read next
+
+- [`docs/operations.md`](../docs/operations.md) — "The participants setting", and how to read a shadow host's probes.

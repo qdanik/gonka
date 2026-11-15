@@ -201,12 +201,18 @@ type Engine struct {
 
 // Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send".
 type Scheduler struct {
-	MatchWaitMS             int64
-	MaxConsecutiveBurns     int64
-	DispatchQueueDepth      int64
-	WarmNewEscrows          bool
-	ParticipantAllowlist    []string
-	UnthrottledParticipants []string
+	MatchWaitMS         int64
+	MaxConsecutiveBurns int64
+	DispatchQueueDepth  int64
+	WarmNewEscrows      bool
+	Participants        Participants
+}
+
+// Participants are the three routing lists of one gateway; an empty Trust routes to everybody but Shadow. See ../docs/operations.md, "The participants setting".
+type Participants struct {
+	Trust       []string
+	Shadow      []string
+	Unthrottled []string
 }
 
 // TimeoutSweep bounds the retry of execution timeouts no race is left to post; a zero BudgetPerTick turns the sweep off.

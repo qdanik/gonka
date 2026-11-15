@@ -3,6 +3,8 @@ package scheduler
 import (
 	"slices"
 	"strings"
+
+	"devshard/cmd/gateway/config"
 )
 
 // refusedByAllowlist stays nil when nobody narrowed routing, so the drain reads "no allowlist" as no rung at all.
@@ -43,28 +45,31 @@ func namedParticipants(list []string) map[string]bool {
 	return named
 }
 
-// reachableByAllowlist is built once per pick, and an empty allowlist skips the walk entirely.
-func reachableByAllowlist(allowlist, unthrottled []string) func(Escrow) bool {
-	if len(allowlist) == 0 {
+// reachableByAllowlist is built once per pick, and an empty trust list with no shadow list skips the walk entirely.
+func reachableByAllowlist(participants config.Participants) func(Escrow) bool {
+	if len(participants.Trust) == 0 && len(participants.Shadow) == 0 {
 		return func(Escrow) bool { return true }
 	}
-	admitted := admittedParticipants(allowlist, unthrottled)
+	admitted := admittedParticipants(participants.Trust, participants.Unthrottled)
+	shadow := namedParticipants(participants.Shadow)
+	routable := func(participant string) bool { return admitted(participant) && !shadow[participant] }
 	return func(candidate Escrow) bool {
 		return candidate.Session != nil &&
-			slices.ContainsFunc(candidate.Session.ParticipantKeys(), admitted)
+			slices.ContainsFunc(candidate.Session.ParticipantKeys(), routable)
 	}
 }
 
-func (s *Scheduler) participantAllowlist() []string {
-	if s.settings == nil {
+func markedShadow(shadow []string) func(participant string) bool {
+	if len(shadow) == 0 {
 		return nil
 	}
-	return s.settings.Load().Scheduler.ParticipantAllowlist
+	named := namedParticipants(shadow)
+	return func(participant string) bool { return named[participant] }
 }
 
-func (s *Scheduler) unthrottledParticipants() []string {
+func (s *Scheduler) participants() config.Participants {
 	if s.settings == nil {
-		return nil
+		return config.Participants{}
 	}
-	return s.settings.Load().Scheduler.UnthrottledParticipants
+	return s.settings.Load().Scheduler.Participants
 }

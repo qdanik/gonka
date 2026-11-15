@@ -34,6 +34,7 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`nonces/`](./nonces/) | what feeds that ledger: live events, chain diffs, the sweep |
 | [`journal/`](./journal/) | one ordered path for race, request and ledger events to their log line or ledger fact |
 | [`warmup/`](./warmup/) | teaching a newly published escrow to its own group |
+| [`shadow/`](./shadow/) | probing the participants that serve no client |
 | [`heights/`](./heights/) | carrying mainnet height into the escrow's log: the courier, and the optional follower |
 | [`hostping/`](./hostping/) | pinging the live escrows' hosts for reachability and clock drift |
 | [`store/`](./store/) | control-plane state in SQLite |

@@ -44,7 +44,7 @@ func TestE2E_GatewayBurnsTheNoncesOfAHostOutsideTheAllowlist(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
 	participants := gatewayParticipants(t, client, env.clientURL)
-	putSettings(t, client, env.clientURL, map[string]any{"participant_allowlist": participants[:2]})
+	putSettings(t, client, env.clientURL, map[string]any{"participants": map[string]any{"trust": participants[:2]}})
 
 	served := 0
 	for request := range 9 {
@@ -71,8 +71,8 @@ func TestE2E_GatewayKeepsServingWhenTheAllowlistIsPutBack(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
 	participants := gatewayParticipants(t, client, env.clientURL)
-	putSettings(t, client, env.clientURL, map[string]any{"participant_allowlist": participants[:1]})
-	putSettings(t, client, env.clientURL, map[string]any{"participant_allowlist": []string{}})
+	putSettings(t, client, env.clientURL, map[string]any{"participants": map[string]any{"trust": participants[:1]}})
+	putSettings(t, client, env.clientURL, map[string]any{"participants": map[string]any{"trust": []string{}}})
 
 	testutil.RequireOpenAINonStreamingCompletion(t,
 		testutil.SendCompletionRaw(t, client, env.clientURL, "allowlist lifted", testutil.AdminAPIKey))

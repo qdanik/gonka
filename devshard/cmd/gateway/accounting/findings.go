@@ -58,7 +58,7 @@ func findingsFor(record ParticipantRecord) []Finding {
 	counted := countedOf(record)
 	delivered := without(record.Dispositions[DispositionFinishedUsed]+
 		record.Dispositions[DispositionFinishedUnused]+
-		record.Dispositions[DispositionFinishedUsageUnknown], counted.deliveredWarmup)
+		record.Dispositions[DispositionFinishedUsageUnknown], counted.deliveredProbes)
 	refused := without(record.Dispositions[DispositionUnfinishedRefused], counted.refusedOffRecord)
 	unfinished := without(record.Dispositions[DispositionUnfinishedExecution], counted.unfinishedOffRecord)
 	reached := delivered + refused + unfinished
@@ -73,7 +73,7 @@ func findingsFor(record ParticipantRecord) []Finding {
 		FindingExecutionTimeouts))
 	add(ratio(refused, reached, refusalWarning, refusalCritical,
 		FindingRefusals))
-	add(ratio(without(record.Dispositions[DispositionFinishedUnused], counted.unusedWarmup), delivered,
+	add(ratio(without(record.Dispositions[DispositionFinishedUnused], counted.unusedProbes), delivered,
 		unusedAnswerWarning, neverCritical, FindingUnusedAnswers))
 	add(ratio(counted.throttledGhosts, record.Assigned, gatewayThrottleWarning, neverCritical,
 		FindingGatewayThrottled))
@@ -122,8 +122,8 @@ func findingsFor(record ParticipantRecord) []Finding {
 
 // Every sum a rate below is measured from, so a participant's counters are walked once rather than per finding.
 type countedNonces struct {
-	deliveredWarmup        uint64
-	unusedWarmup           uint64
+	deliveredProbes        uint64
+	unusedProbes           uint64
 	refusedOffRecord       uint64
 	unfinishedOffRecord    uint64
 	deliveredOutsidePoC    uint64
@@ -165,9 +165,9 @@ func countedOf(record ParticipantRecord) countedNonces {
 		switch key.Disposition {
 		case DispositionFinishedUsed, DispositionFinishedUnused, DispositionFinishedUsageUnknown:
 			if servedNoUser(key) {
-				counted.deliveredWarmup += count
+				counted.deliveredProbes += count
 				if key.Disposition == DispositionFinishedUnused {
-					counted.unusedWarmup += count
+					counted.unusedProbes += count
 				}
 			}
 			if outsidePoC(key) {
@@ -242,9 +242,11 @@ func failedWithoutAnswer(key CounterKey) bool {
 
 func outsidePoC(key CounterKey) bool { return key.Phase != PhasePoC }
 
-func servedNoUser(key CounterKey) bool { return key.Terminal == TerminalWarmupProbe }
+func servedNoUser(key CounterKey) bool {
+	return key.Terminal == TerminalWarmupProbe || key.Terminal == TerminalShadowProbe
+}
 
-// A warmup probe is the gateway's own request, so it leaves every rate whatever it ended as.
+// A warmup or shadow probe is the gateway's own request, so it leaves every rate whatever it ended as.
 func offRecord(key CounterKey) bool { return excused(key) || servedNoUser(key) }
 
 // A failure the host did not cause. Slowness that drove the client away is measured by its own findings.

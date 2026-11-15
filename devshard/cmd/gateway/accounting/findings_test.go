@@ -526,6 +526,24 @@ func TestTheWarmupProbeIsNotAnAnswerNobodyUsed(t *testing.T) {
 }
 
 // Test flow:
+//  1. Build a record of 40 assigned nonces, 20 finished and used, 20 finished and unused, all 20 tagged terminal `TerminalShadowProbe`.
+//  2. Assert findings carry no `FindingUnusedAnswers` code, as a shadow probe is the gateway's own request too.
+func TestTheShadowProbeIsNotAnAnswerNobodyUsed(t *testing.T) {
+	record := recordWith(40, map[Disposition]uint64{
+		DispositionFinishedUsed:   20,
+		DispositionFinishedUnused: 20,
+	})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionFinishedUnused, Terminal: TerminalShadowProbe},
+		Count:      20,
+	}}
+
+	if codes := codesOf(findingsFor(record)); slices.Contains(codes, FindingUnusedAnswers) {
+		t.Errorf("findings %v count the gateway's own shadow probes as answers a client threw away", codes)
+	}
+}
+
+// Test flow:
 //  1. Build a record of 40 assigned nonces, 20 finished and used, 20 finished and unused, with no probe tag.
 //  2. Find the `FindingUnusedAnswers` finding.
 //  3. Assert its part and whole are 20 of 40.

@@ -901,7 +901,7 @@ func TestTheRetirementPriceIsTheModelsContextAndNeverLessThanOneCappedAnswer(t *
 func schedulerWithAllowlist(t *testing.T, allowlist []string, groups map[string][]string) *Scheduler {
 	t.Helper()
 	configuration := config.Defaults()
-	configuration.Scheduler.ParticipantAllowlist = allowlist
+	configuration.Scheduler.Participants.Trust = allowlist
 	holder := &config.Holder{}
 	holder.Swap(&configuration)
 

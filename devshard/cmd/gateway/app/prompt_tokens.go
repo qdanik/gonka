@@ -29,3 +29,19 @@ func promptTokens(modelSnapshots vocabulary.EpochGroupDataQuery, snapshots phase
 	}
 	return pinnedPromptTokens{library: tokenizer.NewLibrary(vocabulary.ChainModelSource{Query: modelSnapshots}, knownEpoch(snapshots))}
 }
+
+type probeTokens struct {
+	prompts api.PromptTokens
+}
+
+func (p probeTokens) Tokens(model string, body []byte) (uint64, bool) {
+	if p.prompts == nil {
+		return 0, false
+	}
+	prompt, known := p.prompts.Prompt(model, body)
+	if !known {
+		return 0, false
+	}
+	counted, counts := prompt.Count()
+	return counted.Tokens, counts
+}
