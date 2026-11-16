@@ -52,6 +52,7 @@ type Binding struct {
 // Runner satisfies scheduler.ShadowProber. See ../docs/routing.md, "Shadow participants".
 type Runner struct {
 	binding Binding
+	bounds  Bounds
 	now     func() time.Time
 	send    sendFunc
 }
@@ -60,8 +61,8 @@ type sendFunc func(ctx context.Context, session registry.EscrowSession, prepared
 
 var _ scheduler.ShadowProber = (*Runner)(nil)
 
-func New(now func() time.Time) *Runner {
-	return &Runner{now: now, send: dispatch}
+func New(now func() time.Time, bounds Bounds) *Runner {
+	return &Runner{now: now, bounds: bounds, send: dispatch}
 }
 
 // Bind is called once, before the gateway serves; a runner never bound sends no probe.

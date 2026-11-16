@@ -10,24 +10,31 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/tokensource"
 )
 
 type recordingProber struct {
 	mu       sync.Mutex
 	requests []ProbeRequest
 	triggers []any
+	profiles []*RequestProfile
 	refuse   bool
 	skipWith ProbeSkip
 }
 
-func (p *recordingProber) Params(request any, startedAt int64) (any, ProbeSkip) {
+func (p *recordingProber) Params(request *RequestProfile, startedAt int64) (any, ProbeSkip) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.triggers = append(p.triggers, request)
+	var params any
+	if request != nil {
+		params = request.Params
+	}
+	p.triggers = append(p.triggers, params)
+	p.profiles = append(p.profiles, request)
 	if p.skipWith != ProbeSkipNone {
 		return nil, p.skipWith
 	}
-	return [2]any{request, startedAt}, ProbeSkipNone
+	return [2]any{params, startedAt}, ProbeSkipNone
 }
 
 func (p *recordingProber) triggered() []any {
@@ -354,6 +361,7 @@ func TestSkippedProbeIsBurnedUnderItsOwnReason(t *testing.T) {
 	}{
 		"grammar constrained": {ProbeSkipGrammarConstrained, GhostReasonProbeGrammarConstrained},
 		"no request":          {ProbeSkipNoRequest, GhostReasonProbeNoRequest},
+		"no room":             {ProbeSkipNoRoom, GhostReasonProbeNoRoom},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -409,5 +417,22 @@ func TestShadowDecisionWithoutALiveRequestBurnsAsNoRequest(t *testing.T) {
 	}
 	if burned, isBurn := decision.(burn); !isBurn || burned.kind != ghostProbeNoRequest {
 		t.Errorf("decision = %#v, want a burn of kind ghostProbeNoRequest", decision)
+	}
+}
+
+// Test flow:
+//  1. Build a dispatcher whose queue holds one live request with a prompt token count, a source and a model, with a recording prober.
+//  2. Ask for the shadow decision.
+//  3. Assert the prober was handed that request's whole profile, so it can read the prompt's size.
+func TestShadowDecisionHandsTheProberTheQueuedProfile(t *testing.T) {
+	t.Parallel()
+	prober := &recordingProber{}
+	queued := RequestProfile{Model: "model-a", InputTokens: 777, InputTokensSource: tokensource.TokenizerExact, Params: "oldest"}
+	queue := &dispatcher{dispatcherDeps: dispatcherDeps{shadow: prober, now: time.Now}, waiting: []*waiter{newWaiter(queued, time.Time{})}}
+
+	queue.shadowDecision()
+
+	if len(prober.profiles) != 1 || prober.profiles[0] == nil || prober.profiles[0].InputTokens != 777 || prober.profiles[0].Model != "model-a" || prober.profiles[0].InputTokensSource != tokensource.TokenizerExact {
+		t.Errorf("profiles = %+v, want the queued request's profile once", prober.profiles)
 	}
 }

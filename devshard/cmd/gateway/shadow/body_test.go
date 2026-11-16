@@ -18,7 +18,11 @@ const (
 	drawCount       = 3000
 	minimumDistinct = 100
 	probeStartedAt  = 1_700_000_123
+
+	smallPromptTokens = 12
 )
+
+var roomyBounds = fixedBounds{probeModel: {OutputCap: 4096, ContextLength: 32768}}
 
 func clientRequest(body string) user.InferenceParams {
 	return user.InferenceParams{Model: probeModel, Prompt: []byte(body), InputLength: uint64(len(body)), MaxTokens: 50, StartedAt: 1}
@@ -33,9 +37,13 @@ func decoded(t *testing.T, body []byte) map[string]any {
 	return members
 }
 
+func queuedProfile(params any) *scheduler.RequestProfile {
+	return &scheduler.RequestProfile{Model: probeModel, InputTokens: smallPromptTokens, Params: params}
+}
+
 func probeParams(t *testing.T, request any) user.InferenceParams {
 	t.Helper()
-	params, skip := New(steppedClock()).Params(request, probeStartedAt)
+	params, skip := New(steppedClock(), roomyBounds).Params(queuedProfile(request), probeStartedAt)
 	if skip != scheduler.ProbeSkipNone {
 		t.Fatalf("skip = %v for %v, want a probe", skip, request)
 	}
@@ -178,7 +186,7 @@ func TestGrammarConstrainedRequestIsNotRepeated(t *testing.T) {
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			params, skip := New(steppedClock()).Params(clientRequest(body), probeStartedAt)
+			params, skip := New(steppedClock(), roomyBounds).Params(queuedProfile(clientRequest(body)), probeStartedAt)
 
 			if skip != scheduler.ProbeSkipGrammarConstrained || params != nil {
 				t.Errorf("params = %v, skip = %v, want no params and ProbeSkipGrammarConstrained", params, skip)
@@ -192,15 +200,15 @@ func TestGrammarConstrainedRequestIsNotRepeated(t *testing.T) {
 //  2. Assert each is skipped as having no request to repeat and builds no params.
 func TestNoClientRequestGivesNoProbe(t *testing.T) {
 	t.Parallel()
-	requests := map[string]any{
+	requests := map[string]*scheduler.RequestProfile{
 		"nil":        nil,
-		"wrong type": "payload",
-		"not json":   user.InferenceParams{Prompt: []byte("plain text")},
+		"wrong type": queuedProfile("payload"),
+		"not json":   queuedProfile(user.InferenceParams{Prompt: []byte("plain text")}),
 	}
 	for name, request := range requests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			params, skip := New(steppedClock()).Params(request, probeStartedAt)
+			params, skip := New(steppedClock(), roomyBounds).Params(request, probeStartedAt)
 
 			if skip != scheduler.ProbeSkipNoRequest || params != nil {
 				t.Errorf("params = %v, skip = %v, want no params and ProbeSkipNoRequest", params, skip)

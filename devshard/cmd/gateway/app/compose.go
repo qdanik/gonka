@@ -251,7 +251,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
 	finishes := &finishNotice{}
-	shadowProbes := shadow.New(clock)
+	shadowProbes := shadow.New(clock, probeBounds{configuration: configHolder, snapshots: observer})
 	escrows, router, prober, err := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,

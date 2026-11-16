@@ -110,7 +110,7 @@ func newFixtureWithin(t *testing.T, lifetime context.Context, send sendFunc) *pr
 	t.Helper()
 	session := &stubSession{}
 	fixture := &probeFixture{
-		runner:   New(steppedClock()),
+		runner:   New(steppedClock(), roomyBounds),
 		escrows:  &stubEscrows{session: session, held: true},
 		session:  session,
 		outcomes: spyOutcomes{results: make(chan Result, 1)},
@@ -133,7 +133,7 @@ func newFixtureWithin(t *testing.T, lifetime context.Context, send sendFunc) *pr
 }
 
 func (f *probeFixture) request() scheduler.ProbeRequest {
-	params, skip := f.runner.Params(clientRequest(clientBody), 1_700_000_000)
+	params, skip := f.runner.Params(queuedProfile(clientRequest(clientBody)), 1_700_000_000)
 	if skip != scheduler.ProbeSkipNone {
 		panic("the client body must give a probe")
 	}
@@ -282,7 +282,7 @@ func TestProbeIsRefusedWhenItCannotBeSent(t *testing.T) {
 		t.Errorf("assignment holds released = %d, want the caller to keep it", fixture.held.Load())
 	}
 
-	if New(steppedClock()).Probe(fixture.request()) {
+	if New(steppedClock(), roomyBounds).Probe(fixture.request()) {
 		t.Error("Probe = true on a runner never bound, want false")
 	}
 	fixture.escrows.held = true
@@ -324,7 +324,7 @@ func TestProbeIsTheOnlyLedgerLineAndLeavesTheClientRequestAlone(t *testing.T) {
 	fixture := newFixture(t, servedAnswer("data: {\"choices\":[],\"usage\":{\"completion_tokens\":700}}\n\ndata: [DONE]\n\n"))
 	client := clientRequest(clientBody)
 	before := bytes.Clone(client.Prompt)
-	params, skip := fixture.runner.Params(client, 1_700_000_000)
+	params, skip := fixture.runner.Params(queuedProfile(client), 1_700_000_000)
 	request := fixture.request()
 	request.Params = params
 

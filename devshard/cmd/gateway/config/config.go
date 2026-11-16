@@ -280,6 +280,14 @@ func (l Limits) ContextLength(model string, governedMaxModelLen uint64) uint64 {
 	return NoContextLength
 }
 
+// OutputTokenCap is the model's own max_tokens_cap, else the global one.
+func (l Limits) OutputTokenCap(model string) uint64 {
+	if perModel := l.ModelLimits[model].MaxTokensCap; perModel > 0 {
+		return uint64(perModel)
+	}
+	return uint64(max(l.MaxTokensCap, 0))
+}
+
 // RetirementReserve is what an escrow of the model must still afford, in the chain's reserve units: its context length as prompt bytes, never less than one capped answer. See capacity.md, "The balance floor".
 func (l Limits) RetirementReserve(model string, governedMaxModelLen uint64) uint64 {
 	return max(uint64(max(l.MaxTokensCap, 0)), filters.PromptBytesPerToken*l.ContextLength(model, governedMaxModelLen))

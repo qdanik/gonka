@@ -16,6 +16,7 @@ const (
 	GhostReasonAbsentFromChain         = "participant_absent_from_chain_no_send"
 	GhostReasonProbeNoRequest          = "shadow_probe_no_request"
 	GhostReasonProbeGrammarConstrained = "shadow_probe_grammar_constrained"
+	GhostReasonProbeNoRoom             = "shadow_probe_no_room"
 )
 
 // ProbeSkip is why a shadow participant's nonce is burned instead of probed; ProbeSkipNone is a probe that can be built. See routing.md, "Shadow participants".
@@ -25,6 +26,7 @@ const (
 	ProbeSkipNone ProbeSkip = iota
 	ProbeSkipNoRequest
 	ProbeSkipGrammarConstrained
+	ProbeSkipNoRoom
 )
 
 // ExhaustionReason is why routing will no longer pick an escrow, reported to the lifecycle that replaces it; ExhaustionNone is an escrow it may still pick, and the fallback nonce ceiling is never reported, so it never leaves this package. See routing.md, "Picking an escrow".
