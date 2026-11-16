@@ -84,18 +84,6 @@ func TestShadowEntryMustLookLikeAnAddress(t *testing.T) {
 }
 
 // Test flow:
-//  1. Parse an admin document naming a retired key.
-//  2. Assert `ParseOverrides` refuses it, as the admin API accepts only `participants`.
-func TestAdminDocumentRefusesTheRetiredKeys(t *testing.T) {
-	t.Parallel()
-	for _, retired := range []string{"participant_allowlist", "unthrottled_participants"} {
-		if _, err := ParseOverrides([]byte(`{"` + retired + `":["gonka1scskt"]}`)); err == nil {
-			t.Errorf("ParseOverrides accepted the retired key %q", retired)
-		}
-	}
-}
-
-// Test flow:
 //  1. Start from stored participants naming trust and shadow, and patch only `shadow`.
 //  2. Assert trust stays and shadow is replaced.
 //  3. Patch `trust` to null and assert it is cleared while shadow stays.

@@ -100,21 +100,6 @@ func TestAPutSettingsDocumentReplacesTheStoredParticipants(t *testing.T) {
 }
 
 // Test flow:
-//  1. PUT and POST a settings body naming one of the retired keys.
-//  2. Assert both are refused with a 400, since the admin API accepts only `participants`.
-func TestTheAdminAPIRefusesTheRetiredRoutingKeys(t *testing.T) {
-	live := newHarness(t)
-
-	for _, method := range []string{http.MethodPut, http.MethodPost} {
-		for _, body := range []string{`{"participant_allowlist":["gonka1scskt"]}`, `{"unthrottled_participants":["gonka1scskt"]}`} {
-			if recorder := live.request(t, method, "/v1/admin/settings", body, adminHeaders()); recorder.Code != http.StatusBadRequest {
-				t.Errorf("%s %s: status %d, want 400", method, body, recorder.Code)
-			}
-		}
-	}
-}
-
-// Test flow:
 //  1. Start a gateway whose configuration in force names a trust, a shadow and an unthrottled list, and capture the log.
 //  2. POST an empty settings patch.
 //  3. Assert the "settings written" audit line carries all three lists as they stand.

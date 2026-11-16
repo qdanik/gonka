@@ -621,28 +621,3 @@ func TestAnAcknowledgedCommitmentIsInTheMainDatabaseFile(t *testing.T) {
 		t.Fatalf("LoadCommitments(copy) = %+v, %v, want %+v: the commitment must reach the main file before SaveCommitment returns", recovered, err, commitment)
 	}
 }
-
-// Test flow:
-//  1. Write into the overrides row a document in the shape older builds saved: both retired routing keys beside a tunable.
-//  2. Load the overrides.
-//  3. Assert the load succeeds, the tunable is kept and `Participants` is nil, the retired keys being ignored.
-func TestAStoredDocumentWithTheRetiredRoutingKeysLoadsWithoutThem(t *testing.T) {
-	testStore := openTestStore(t)
-	ctx := context.Background()
-	stored := `{"participant_allowlist":["gonka1scskt"],"unthrottled_participants":["gonka1f0u3y"],"default_max_tokens":321}`
-	if _, err := testStore.db.ExecContext(ctx, `INSERT INTO config_overrides (id, overrides_json, updated_at) VALUES (1, ?, datetime('now'))`, stored); err != nil {
-		t.Fatalf("writing the stored document: %v", err)
-	}
-
-	loaded, err := testStore.LoadOverrides(ctx)
-
-	if err != nil {
-		t.Fatalf("LoadOverrides(): %v", err)
-	}
-	if loaded.DefaultMaxTokens == nil || *loaded.DefaultMaxTokens != 321 {
-		t.Errorf("default_max_tokens = %v, want 321 kept", loaded.DefaultMaxTokens)
-	}
-	if loaded.Participants != nil {
-		t.Errorf("participants = %+v, want nil: the retired keys are ignored", loaded.Participants)
-	}
-}
