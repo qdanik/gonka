@@ -204,8 +204,6 @@ The rule does not reach values. A struct the caller fills with already-checked n
 
 **No per-request cost accounting.** The request ledger records tokens and topology, not money. A breakdown computed as a read-time join against live session state would print zeros once an escrow settles. Money lives in chain settlement; the ledger answers "what did this request do", not "what did it cost".
 
-**No KV-cache affinity routing.** Unreachable, not deferred: the protocol addresses a participant, never a node behind it, so which of a participant's nodes serves a request is decided by that participant's own router.
-
 **No data-driven escalation beyond the first-token budget.** The escalation curve itself is a hardcoded quadratic in prompt size. One measured value stretches it: a host's own p75 to first content, which can only *extend* the budget, never shorten it (`engine/escalation.go`, `firstTokenBudget`). Nothing else in the ladder reads a percentile.
 
 **No cached reply behind any refusal but proof-of-compute.** A hit needs no host, no nonce and no limiter slot, so while proof-of-compute blocks requests the gateway still answers the requests it has already answered, and refuses every miss. Proof-of-compute outranks a stale snapshot in `admission`, so a snapshot that went stale while it was blocked still serves hits — a cached reply does not depend on the chain. A stale snapshot outside proof-of-compute serves none, and the kill switch refuses before `chat` runs (`api/admission.go`, `blockedOnlyByPoC`).
