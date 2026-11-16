@@ -86,8 +86,8 @@ func TestShadowHostsNonceIsSpentOnAProbeNotAGhost(t *testing.T) {
 // Test flow:
 //  1. Build a harness where `hostB` is shadowed and no prober is wired.
 //  2. Submit one request and await its reply.
-//  3. Assert the request is served by `hostA` and the shadowed nonce was burned as a ghost outside the allowlist, so a shadow host is never routed client traffic.
-func TestShadowHostWithoutAProberBurnsAsOutsideTheAllowlist(t *testing.T) {
+//  3. Assert the request is served by `hostA` and the shadowed nonce was burned as a ghost outside the trust list, so a shadow host is never routed client traffic.
+func TestShadowHostWithoutAProberBurnsAsOutsideTheTrustList(t *testing.T) {
 	test := newHarness(t, harnessConfig{shadowed: shadowing(hostB)})
 
 	queued := test.submit(t, test.clock.Now())
@@ -95,15 +95,15 @@ func TestShadowHostWithoutAProberBurnsAsOutsideTheAllowlist(t *testing.T) {
 	wantAssignment(t, awaitReply(t, queued), hostA, 2)
 	test.dispatcher.stop()
 
-	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostNotAllowed.reason() {
-		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostNotAllowed.reason())
+	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostUntrusted.reason() {
+		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostUntrusted.reason())
 	}
 }
 
 // Test flow:
 //  1. Build a harness where `hostB` is shadowed and the prober refuses every probe, with an escrow hold that counts its releases.
 //  2. Submit one request and await its reply.
-//  3. Assert the refused nonce is burned as a ghost outside the allowlist and the request still lands on `hostA`.
+//  3. Assert the refused nonce is burned as a ghost outside the trust list and the request still lands on `hostA`.
 //  4. Assert every hold taken was released by the dispatcher, since the prober took over none.
 func TestRefusedProbeIsBurnedAndItsHoldReleased(t *testing.T) {
 	var released atomic.Int64
@@ -116,8 +116,8 @@ func TestRefusedProbeIsBurnedAndItsHoldReleased(t *testing.T) {
 	result := awaitReply(t, test.submit(t, test.clock.Now()))
 	test.dispatcher.stop()
 
-	if burns := test.observer.burns(); len(burns) == 0 || burns[0] != ghostNotAllowed.reason() {
-		t.Fatalf("ghost burns = %v, want the refused probe burned as %q", burns, ghostNotAllowed.reason())
+	if burns := test.observer.burns(); len(burns) == 0 || burns[0] != ghostUntrusted.reason() {
+		t.Fatalf("ghost burns = %v, want the refused probe burned as %q", burns, ghostUntrusted.reason())
 	}
 	if result.err != nil {
 		t.Fatalf("second request err = %v, want an assignment", result.err)
@@ -225,12 +225,12 @@ func TestShadowHostStillBurnsWhereAProbeCannotBeServed(t *testing.T) {
 
 // Test flow:
 //  1. Build a `laddered` availability where the participant is shadowed and also outside a non-empty trust list.
-//  2. Assert the reason is `blockShadow`, not `blockNotAllowed`: shadow replaces the outside-the-allowlist burn.
-func TestShadowReplacesTheOutsideAllowlistBurn(t *testing.T) {
+//  2. Assert the reason is `blockShadow`, not `blockUntrusted`: shadow replaces the untrusted burn.
+func TestShadowReplacesTheUntrustedBurn(t *testing.T) {
 	t.Parallel()
 	gates := laddered(func(gates *availability) {
 		gates.shadowed = always(true)
-		gates.notAllowed = always(true)
+		gates.untrusted = always(true)
 	})
 
 	if reason := gates.participantBlocked(hostA); reason != blockShadow {
@@ -257,12 +257,12 @@ func TestEmptyTrustWithShadowRoutesEveryoneElse(t *testing.T) {
 // Test flow:
 //  1. Build a scheduler whose settings name `hostA` trust and `hostB` shadow.
 //  2. Read the fleet gates for a model.
-//  3. Assert `hostA` is open, `hostB` is `blockShadow` and a stranger is `blockNotAllowed`.
+//  3. Assert `hostA` is open, `hostB` is `blockShadow` and a stranger is `blockUntrusted`.
 func TestTrustAndShadowTogetherNarrowRoutingAndProbeTheShadowHost(t *testing.T) {
 	t.Parallel()
 	gates := gatesFor(config.Participants{Trust: []string{hostA}, Shadow: []string{hostB}})
 
-	for participant, want := range map[string]blockReason{hostA: blockNone, hostB: blockShadow, "stranger": blockNotAllowed} {
+	for participant, want := range map[string]blockReason{hostA: blockNone, hostB: blockShadow, "stranger": blockUntrusted} {
 		if reason := gates.participantBlocked(participant); reason != want {
 			t.Errorf("%s: reason = %v, want %v", participant, reason, want)
 		}
@@ -277,11 +277,11 @@ func TestEscrowHoldingOnlyShadowParticipantsIsUnreachable(t *testing.T) {
 	soleShadow := Escrow{Session: &fakeSession{slots: []string{hostA}, participants: []string{hostA}}}
 	shadowAndOther := Escrow{Session: &fakeSession{slots: []string{hostA, hostB}, participants: []string{hostA, hostB}}}
 
-	shadowOnly := reachableByAllowlist(config.Participants{Shadow: []string{hostA}})
+	shadowOnly := reachableByTrust(config.Participants{Shadow: []string{hostA}})
 	if shadowOnly(soleShadow) || !shadowOnly(shadowAndOther) {
 		t.Errorf("empty trust: sole shadow reachable = %v, shadow and other reachable = %v, want false and true", shadowOnly(soleShadow), shadowOnly(shadowAndOther))
 	}
-	trusted := reachableByAllowlist(config.Participants{Trust: []string{hostA}, Shadow: []string{hostB}})
+	trusted := reachableByTrust(config.Participants{Trust: []string{hostA}, Shadow: []string{hostB}})
 	if !trusted(soleShadow) || trusted(Escrow{Session: &fakeSession{slots: []string{hostB}, participants: []string{hostB}}}) {
 		t.Error("with trust named, an escrow is reachable through its trusted participant alone, never through its shadow one")
 	}

@@ -15,7 +15,7 @@ The choice to probe. `scheduler` decides that a nonce bound to a shadow host is 
 ## Boundaries
 
 - **The probe is the gateway's own request.** It never touches the limiter or the host-health tracker, so it leaves every rate that drives routing alone, and the ledger keeps it off both sides of every serving ratio.
-- **`Bind` is late.** The runner is built before the registry and the vote path exist, as the warmup prober is; a runner never bound refuses every probe. A probe refused after its nonce was committed, because the escrow could not be held again, leaves that nonce pending exactly as a ghost burn does, and the scheduler records it as the burn `participant_outside_allowlist`.
+- **`Bind` is late.** The runner is built before the registry and the vote path exist, as the warmup prober is; a runner never bound refuses every probe. A probe refused after its nonce was committed, because the escrow could not be held again, leaves that nonce pending exactly as a ghost burn does, and the scheduler records it as the burn `participant_untrusted`.
 - **A probe ends with the gateway.** Its send and its vote derive from the context passed to `Bind`.
 - **`InputLength` is the body's byte length**, which is what a host verifies, whatever the tokenizer counted.
 

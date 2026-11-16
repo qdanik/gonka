@@ -17,7 +17,7 @@ type ProbeRequest struct {
 
 func (d *dispatcher) shadowDecision() Decision {
 	if d.shadow == nil {
-		return burn{kind: ghostNotAllowed}
+		return burn{kind: ghostUntrusted}
 	}
 	return probe{params: d.shadow.Params(d.model, d.now().Unix())}
 }
@@ -31,6 +31,6 @@ func (d *dispatcher) sendProbe(sent probe, taken reservation, prepared Prepared)
 	if d.shadow.Probe(ProbeRequest{Assignment: assignment, Model: d.model, Params: sent.params}) {
 		return
 	}
-	d.recordGhost(Burn{Nonce: prepared.Nonce(), Participant: taken.participant, Reason: ghostNotAllowed.reason(), RequestID: d.burnedDuring(nil)})
+	d.recordGhost(Burn{Nonce: prepared.Nonce(), Participant: taken.participant, Reason: ghostUntrusted.reason(), RequestID: d.burnedDuring(nil)})
 	taken.releaseHold()
 }

@@ -7,21 +7,21 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// refusedByAllowlist stays nil when nobody narrowed routing, so the drain reads "no allowlist" as no rung at all.
-func refusedByAllowlist(allowlist, unthrottled []string) func(participant string) bool {
-	if len(allowlist) == 0 {
+// refusedByTrust stays nil when nobody narrowed routing, so the drain reads "no trust list" as no rung at all.
+func refusedByTrust(trust, unthrottled []string) func(participant string) bool {
+	if len(trust) == 0 {
 		return nil
 	}
-	admitted := admittedParticipants(allowlist, unthrottled)
+	admitted := admittedParticipants(trust, unthrottled)
 	return func(participant string) bool { return !admitted(participant) }
 }
 
-// admittedParticipants answers true for everybody when the allowlist is empty, and admits an unthrottled participant whether or not it names one.
-func admittedParticipants(allowlist, unthrottled []string) func(participant string) bool {
-	if len(allowlist) == 0 {
+// admittedParticipants answers true for everybody when the trust list is empty, and admits an unthrottled participant whether or not it names one.
+func admittedParticipants(trust, unthrottled []string) func(participant string) bool {
+	if len(trust) == 0 {
 		return func(string) bool { return true }
 	}
-	admitted := namedParticipants(allowlist)
+	admitted := namedParticipants(trust)
 	for _, participant := range unthrottled {
 		admitted[strings.TrimSpace(participant)] = true
 	}
@@ -45,8 +45,8 @@ func namedParticipants(list []string) map[string]bool {
 	return named
 }
 
-// reachableByAllowlist is built once per pick, and an empty trust list with no shadow list skips the walk entirely.
-func reachableByAllowlist(participants config.Participants) func(Escrow) bool {
+// reachableByTrust is built once per pick, and an empty trust list with no shadow list skips the walk entirely.
+func reachableByTrust(participants config.Participants) func(Escrow) bool {
 	if len(participants.Trust) == 0 && len(participants.Shadow) == 0 {
 		return func(Escrow) bool { return true }
 	}

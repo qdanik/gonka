@@ -310,7 +310,7 @@ func intentFor(decision Decision) NonceIntent {
 	}
 }
 
-// freeze memoises the ladder for the drain; a predicate nobody set is left nil, so "no allowlist" stays distinct from one that refuses everybody.
+// freeze memoises the ladder for the drain; a predicate nobody set is left nil, so "no trust list" stays distinct from one that refuses everybody.
 func freeze(live availability, hosts int) availability {
 	live.frozen = make(map[string]blockReason, hosts)
 	return live

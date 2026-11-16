@@ -8,7 +8,7 @@ const (
 	GhostReasonWindowFull          = "participant_window_full_no_send"
 	GhostReasonCutOff              = "participant_cut_off_no_send"
 	GhostReasonEjected             = "participant_ejected_no_send"
-	GhostReasonOutsideAllowlist    = "participant_outside_allowlist"
+	GhostReasonUntrusted           = "participant_untrusted"
 	GhostReasonStateDiverged       = "participant_state_diverged_no_send"
 	GhostReasonNoCompatibleRequest = "no_compatible_request_after_stale"
 	GhostReasonAbandoned           = "request_abandoned_before_dispatch"

@@ -20,7 +20,7 @@ func (s *Scheduler) fleetGates(model string, snapshot chain.PhaseSnapshot) avail
 	preserved := pocPreserved(snapshot, model)
 	participants := s.participants()
 	return availability{
-		notAllowed:  refusedByAllowlist(participants.Trust, participants.Unthrottled),
+		untrusted:   refusedByTrust(participants.Trust, participants.Unthrottled),
 		unthrottled: waivesThrottling(participants.Unthrottled),
 		shadowed:    markedShadow(participants.Shadow),
 		pocRequired: func(participant string) bool { return preserved != nil && !preserved[participant] },

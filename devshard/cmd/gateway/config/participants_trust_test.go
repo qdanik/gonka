@@ -9,7 +9,7 @@ import (
 
 // Test flow:
 //  1. Build a config with a `Participants.Trust` override.
-//  2. Assert the built scheduler's allowlist matches the override.
+//  2. Assert the built scheduler's trust list matches the override.
 func TestTrustOverrideReachesTheSnapshot(t *testing.T) {
 	t.Parallel()
 	wanted := []string{"gonka1scskt", "gonka1f0u3y", "gonka1z6xwd"}
@@ -52,7 +52,7 @@ func TestTrustSurvivesAnUnrelatedOverride(t *testing.T) {
 // Test flow:
 //  1. Build a config from an override slice.
 //  2. Mutate the original slice's first element.
-//  3. Assert the built config's allowlist keeps its original value, since `Build` clones it rather than aliasing the caller's slice.
+//  3. Assert the built config's trust list keeps its original value, since `Build` clones it rather than aliasing the caller's slice.
 func TestTrustIsClonedFromTheOverride(t *testing.T) {
 	t.Parallel()
 	source := []string{"gonka1scskt"}

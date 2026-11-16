@@ -9,7 +9,7 @@ type availability struct {
 	pocRequired  func(participant string) bool
 	congested    func(participant string) blockReason
 	ejected      func(participant string) bool
-	notAllowed   func(participant string) bool
+	untrusted    func(participant string) bool
 	stateBlocked func(participant string) bool
 	absent       func(participant string) bool
 	budgetSpent  func(participant string) bool
@@ -28,7 +28,7 @@ const (
 	blockWindowFull
 	blockCutOff
 	blockEjected
-	blockNotAllowed
+	blockUntrusted
 	blockExcluded
 	blockStateDiverged
 	blockAbsentFromChain
@@ -41,7 +41,7 @@ var ghostFor = map[blockReason]GhostKind{
 	blockWindowFull:      ghostWindowFull,
 	blockCutOff:          ghostCutOff,
 	blockEjected:         ghostEjected,
-	blockNotAllowed:      ghostNotAllowed,
+	blockUntrusted:       ghostUntrusted,
 	blockStateDiverged:   ghostStateDiverged,
 	blockAbsentFromChain: ghostAbsentFromChain,
 }
@@ -55,8 +55,8 @@ func (a availability) absentFromSession(participant string) bool {
 	return a.absent != nil && a.absent(participant)
 }
 
-func (a availability) outsideAllowlist(participant string) bool {
-	return a.notAllowed != nil && a.notAllowed(participant)
+func (a availability) outsideTrust(participant string) bool {
+	return a.untrusted != nil && a.untrusted(participant)
 }
 
 func (a availability) shadowMember(participant string) bool {
@@ -91,8 +91,8 @@ func (a availability) memoisedBlock(participant string) blockReason {
 // firstBlock stops at the first rung that holds, so no rung below it is asked.
 func (a availability) firstBlock(participant string) blockReason {
 	shadow := a.shadowMember(participant)
-	if !shadow && a.outsideAllowlist(participant) {
-		return blockNotAllowed
+	if !shadow && a.outsideTrust(participant) {
+		return blockUntrusted
 	}
 	if a.absentFromSession(participant) {
 		return blockAbsentFromChain
