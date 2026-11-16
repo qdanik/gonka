@@ -116,6 +116,7 @@ type Engine struct {
 	lookups        *lookupRefusals
 	settles        *settleQueue
 	heldWinners    *heldWinners
+	handovers      *handovers
 	stopping       context.Context
 	cancelStopping context.CancelFunc
 
@@ -154,6 +155,7 @@ func NewEngine(deps Deps) (*Engine, error) {
 		lookups:        newLookupRefusals(),
 		settles:        newSettleQueue(clock),
 		heldWinners:    newHeldWinners(),
+		handovers:      newHandovers(stopping),
 		stopping:       stopping,
 		cancelStopping: cancelStopping,
 	}, nil
@@ -395,8 +397,7 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 		e.oweRefusals(outcome, params, poster, group.steps)
 		e.queueVotes(outcome, poster, group.steps, func() {
 			e.decideHeldWinners(outcome.EscrowID, group.steps, registration)
-			markPosted()
-		}, markSettled)
+		}, markPosted, markSettled)
 	}
 }
 
@@ -410,36 +411,48 @@ func (e *Engine) poster(escrowID string, params any) TimeoutPoster {
 	return nil
 }
 
-func (e *Engine) queueVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, afterPost, markSettled func()) {
+func (e *Engine) queueVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, decide, markPosted, markSettled func()) {
 	due := func() time.Time { return earliestDue(steps, poster) }
 	unripe := func() bool { return due().After(e.settles.now()) }
+	wake := e.stopping
+	if executionVotesOnly(steps) {
+		wake = e.handovers.wake(outcome.EscrowID)
+	}
+	releaseUnposted := func() {
+		decide()
+		if e.stopping.Err() == nil {
+			markPosted()
+		}
+		markSettled()
+	}
 	task := settleTask{
 		deadline: due,
-		wake:     e.stopping,
+		wake:     wake,
 		post: func() {
-			// A vote not yet due at Stop is left owed in the store or to the next boot's sweep.
-			if e.stopping.Err() != nil && unripe() {
-				markSettled()
+			// A vote not yet due at Stop or at a handover is left owed in the store or to the next sweep.
+			if wake.Err() != nil && unripe() {
+				releaseUnposted()
 				return
 			}
-			ctx, release := e.cancelUnripeOnStop(settleContext(outcome.RequestID), unripe)
+			ctx, release := cancelUnripeOnWake(wake, settleContext(outcome.RequestID), unripe)
 			defer release()
 			retries := settleSteps(ctx, poster, steps, outcome.Lifecycle.EscrowMissing, e.reportTimeout)
 			if ctx.Err() != nil {
-				markSettled()
+				releaseUnposted()
 				return
 			}
 			e.payRefusals(outcome.EscrowID, steps, retries)
-			afterPost()
+			decide()
+			markPosted()
 			e.retryRefusedVotes(outcome, poster, retries, markSettled, 0)
 		},
 	}
 	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
 }
 
-func (e *Engine) cancelUnripeOnStop(ctx context.Context, unripe func() bool) (context.Context, func()) {
+func cancelUnripeOnWake(wake, ctx context.Context, unripe func() bool) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(e.stopping, func() {
+	stop := context.AfterFunc(wake, func() {
 		if unripe() {
 			cancel()
 		}

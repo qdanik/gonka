@@ -1069,7 +1069,7 @@ func TestActivatingAReserveRowPublishesItAsAReserve(t *testing.T) {
 		t.Fatalf("UpsertDevshard(): %v", err)
 	}
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows}
 
 	if err := operator.Activate(ctx, "escrow-1"); err != nil {
 		t.Fatalf("Activate() = %v, want nil", err)
@@ -1101,7 +1101,7 @@ func TestRegisteringAParkedEscrowIsRefused(t *testing.T) {
 		t.Fatalf("SetDevshardSettleTxHash(): %v", err)
 	}
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows}
 
 	err := operator.AddDevshard(ctx, api.AddDevshardRequest{
 		EscrowID: "1", Model: "model-a", PrivateKeyEnv: "DEVSHARD_PARKED_KEY", Activate: true,
@@ -1129,7 +1129,7 @@ func TestRegisteringAnEscrowTheStoreHasNotSeenPublishesIt(t *testing.T) {
 	t.Setenv("DEVSHARD_FRESH_KEY", "0x01")
 	records := openedStore(t)
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows}
 
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{
 		EscrowID: "1", Model: "model-a", PrivateKeyEnv: "DEVSHARD_FRESH_KEY", Activate: true,
@@ -1155,7 +1155,7 @@ func TestRegisteringAnEscrowWhoseIDIsNotAChainEscrowIDIsRefused(t *testing.T) {
 	t.Setenv("DEVSHARD_FRESH_KEY", "0x01")
 	records := openedStore(t)
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows}
 
 	for _, escrowID := range []string{"1/../../outside", "escrow-1", "007", "+7", " 7", "-1", "18446744073709551616"} {
 		err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: escrowID, Model: "model-a", PrivateKeyEnv: "DEVSHARD_FRESH_KEY", Activate: true})
@@ -1185,7 +1185,7 @@ func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
 	configuration := config.Defaults()
 	limiter := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), time.Now)
 	limiter.OnResult(limits.Result{Participant: "validator-a", Model: "model-a", Verdict: limits.TransportFault})
-	operator := &operations{participants: limiter}
+	operator := &operations{races: noHandover{}, participants: limiter}
 
 	if err := operator.Unquarantine(context.Background(), "validator-typo"); !errors.Is(err, api.ErrUnknownParticipant) {
 		t.Fatalf("Unquarantine(unknown) = %v, want ErrUnknownParticipant", err)

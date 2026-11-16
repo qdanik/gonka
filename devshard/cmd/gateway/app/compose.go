@@ -389,6 +389,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			config:       configHolder,
 			store:        gatewayStore,
 			escrows:      escrows,
+			races:        races,
 			manager:      manager,
 			participants: participants,
 			storageDir:   storageDir,

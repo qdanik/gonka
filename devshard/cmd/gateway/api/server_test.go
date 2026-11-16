@@ -285,6 +285,8 @@ func (f *fakeOperations) Deactivate(_ context.Context, escrowID string) error {
 	return f.record("deactivate")
 }
 
+func (f *fakeOperations) HandOver(context.Context, string) error { return f.record("hand over") }
+
 func (f *fakeOperations) Settle(ctx context.Context, escrowID string, _ bool) (chain.SettleEscrowResult, error) {
 	f.mu.Lock()
 	f.settleCtx = ctx

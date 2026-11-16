@@ -41,7 +41,7 @@ func TestAParkLandingWhileActivateOpensTheSessionKeepsTheEscrowUnroutable(t *tes
 		t.Fatalf("UpsertDevshard(): %v", err)
 	}
 	escrows := parkingRegistry(t, records)
-	operator := &operations{store: records, escrows: escrows}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows}
 
 	if err := operator.Activate(ctx, "42"); err != nil {
 		t.Fatalf("Activate(42) = %v, want nil", err)
@@ -64,7 +64,7 @@ func TestAParkLandingWhileAnImportOpensTheSessionKeepsTheEscrowUnroutable(t *tes
 	t.Setenv("DEVSHARD_IMPORT_KEY", "0x01")
 	records := openedStore(t)
 	escrows := parkingRegistry(t, records)
-	operator := &operations{store: records, escrows: escrows, storageDir: t.TempDir()}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: t.TempDir()}
 
 	if err := operator.ImportDevshard(ctx, api.ImportDevshardRequest{EscrowID: "42", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a", Activate: true}); err != nil {
 		t.Fatalf("ImportDevshard(42) = %v, want nil", err)
@@ -93,7 +93,7 @@ func TestActivatingAParkedRowIsRefusedAndNotPublished(t *testing.T) {
 		t.Fatalf("ParkForSettlement(): %v", err)
 	}
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows}
 
 	err := operator.Activate(ctx, "42")
 
@@ -113,7 +113,7 @@ func TestActivatingAParkedRowIsRefusedAndNotPublished(t *testing.T) {
 //  2. Call operator.Activate for escrow 42, which has no row.
 //  3. Assert it returns ErrUnknownDevshard.
 func TestActivatingAnEscrowWithoutARowReportsItUnknown(t *testing.T) {
-	operator := &operations{store: openedStore(t), escrows: servingRegistry(t)}
+	operator := &operations{races: noHandover{}, store: openedStore(t), escrows: servingRegistry(t)}
 
 	if err := operator.Activate(t.Context(), "42"); !errors.Is(err, api.ErrUnknownDevshard) {
 		t.Fatalf("Activate(42) = %v, want ErrUnknownDevshard", err)

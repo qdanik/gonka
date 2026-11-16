@@ -64,7 +64,7 @@ func TestAnInactiveRegistrationRacingARepublishPassLeavesTheEscrowUnrouted(t *te
 	t.Setenv("DEVSHARD_IMPORT_KEY", "0x01")
 	records := openedStore(t)
 	escrows, pass := registryWithRacingPass(t, records)
-	operator := &operations{store: records, escrows: escrows, storageDir: t.TempDir()}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: t.TempDir()}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Activate: true}); err != nil {
 		t.Fatalf("AddDevshard(active) = %v", err)
 	}
@@ -91,7 +91,7 @@ func TestADeactivationRacingARepublishPassLeavesTheEscrowUnrouted(t *testing.T) 
 	t.Setenv("DEVSHARD_IMPORT_KEY", "0x01")
 	records := openedStore(t)
 	escrows, pass := registryWithRacingPass(t, records)
-	operator := &operations{store: records, escrows: escrows, storageDir: t.TempDir()}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: t.TempDir()}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Activate: true}); err != nil {
 		t.Fatalf("AddDevshard(active) = %v", err)
 	}

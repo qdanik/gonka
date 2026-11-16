@@ -27,7 +27,7 @@ func TestConcurrentActivateAndDeactivateLeaveTheRowAndRoutingAgreeing(t *testing
 	t.Setenv("DEVSHARD_IMPORT_KEY", "0x01")
 	records := openedStore(t)
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows, storageDir: t.TempDir()}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: t.TempDir()}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Activate: true}); err != nil {
 		t.Fatalf("AddDevshard(active) = %v", err)
 	}
@@ -119,7 +119,7 @@ func (s *lockCheckingSettler) Settle(_ context.Context, escrowID string, _ bool)
 func TestASettleHoldsTheEscrowsLockAroundTheChainSettlement(t *testing.T) {
 	records, escrows := settleableEscrow(t)
 	settler := &lockCheckingSettler{}
-	operator := &operations{store: records, escrows: escrows, manager: settler}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, manager: settler}
 	settler.operator = operator
 
 	if _, err := operator.Settle(context.Background(), "42", false); err != nil {
@@ -138,7 +138,7 @@ func TestASettleHoldsTheEscrowsLockAroundTheChainSettlement(t *testing.T) {
 //  4. Assert the settle succeeds and the escrow no longer routes.
 func TestASettleWaitsForAnotherWriteHoldingTheEscrowsLock(t *testing.T) {
 	records, escrows := settleableEscrow(t)
-	operator := &operations{store: records, escrows: escrows, manager: &settleObserver{escrows: escrows}}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, manager: &settleObserver{escrows: escrows}}
 	unlock := operator.lockWrites("42")
 
 	settled := make(chan error, 1)
