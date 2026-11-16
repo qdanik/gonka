@@ -8,17 +8,23 @@ const (
 	OutcomeFailed = "failed"
 )
 
-// The probe's size is fixed at ProbeInputTokens of prompt and at most ProbeMaxTokens of answer; the rest is how it is built, bounded and read. See README.md.
+// The probe asks for a random number of output tokens in [ProbeMinOutputTokens, ProbeMaxOutputTokens], drawn per probe; the rest is how it is built, bounded and read. See README.md.
 const (
-	ProbeInputTokens  = 64
-	ProbeMaxTokens    = 64
-	probeTimeout      = 2 * time.Minute
-	fitAttempts       = 3
-	fallbackBytes     = 64
-	probeWord         = "hello "
-	maxCaptureBytes   = 64 << 10
-	probeBodyFormat   = `{"messages":[{"role":"user","content":%q}],"max_tokens":%d,"stream":true,"stream_options":{"include_usage":true}}`
-	countedBodyFormat = `{"messages":[{"role":"user","content":%q}]}`
-	dataPrefix        = "data:"
-	doneMarker        = "[DONE]"
+	ProbeMinOutputTokens = 256
+	ProbeMaxOutputTokens = 1024
+	probeTimeout         = 2 * time.Minute
+	maxCaptureBytes      = 64 << 10
+	dataPrefix           = "data:"
+	doneMarker           = "[DONE]"
+)
+
+// The members of a chat request body a probe rewrites.
+const (
+	fieldMaxTokens           = "max_tokens"
+	fieldMaxCompletionTokens = "max_completion_tokens"
+	fieldMinTokens           = "min_tokens"
+	fieldTools               = "tools"
+	fieldStream              = "stream"
+	fieldStreamOptions       = "stream_options"
+	fieldIncludeUsage        = "include_usage"
 )

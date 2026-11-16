@@ -44,7 +44,6 @@ type Result struct {
 type Binding struct {
 	Escrows  Escrows
 	Lifetime context.Context
-	Counter  TokenCounter
 	Voter    warmup.Voter
 	Probes   warmup.Probes
 	Outcomes Outcomes
@@ -53,7 +52,6 @@ type Binding struct {
 // Runner satisfies scheduler.ShadowProber. See ../docs/routing.md, "Shadow participants".
 type Runner struct {
 	binding Binding
-	prompts *prompts
 	now     func() time.Time
 	send    sendFunc
 }
@@ -63,24 +61,12 @@ type sendFunc func(ctx context.Context, session registry.EscrowSession, prepared
 var _ scheduler.ShadowProber = (*Runner)(nil)
 
 func New(now func() time.Time) *Runner {
-	return &Runner{prompts: newPrompts(nil), now: now, send: dispatch}
+	return &Runner{now: now, send: dispatch}
 }
 
 // Bind is called once, before the gateway serves; a runner never bound sends no probe.
 func (r *Runner) Bind(binding Binding) {
 	r.binding = binding
-	r.prompts = newPrompts(binding.Counter)
-}
-
-func (r *Runner) Params(model string, startedAt int64) any {
-	body := r.prompts.body(model)
-	return user.InferenceParams{
-		Model:       model,
-		Prompt:      body,
-		InputLength: uint64(len(body)),
-		MaxTokens:   ProbeMaxTokens,
-		StartedAt:   startedAt,
-	}
 }
 
 func (r *Runner) Probe(request scheduler.ProbeRequest) bool {

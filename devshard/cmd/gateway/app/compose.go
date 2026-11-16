@@ -334,7 +334,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	shadowProbes.Bind(shadow.Binding{
 		Escrows:  escrows,
 		Lifetime: ctx,
-		Counter:  probeTokens{prompts: prompts},
 		Voter:    warmup.Voter{Posters: sessions.Poster, Timeouts: probeTimeouts},
 		Probes:   events,
 		Outcomes: shadowOutcomes{recorder: metrics.NewShadowProbeRecorder(telemetry), events: events},

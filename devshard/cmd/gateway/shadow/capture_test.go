@@ -62,3 +62,22 @@ func TestCaptureKeepsOnlyItsCeiling(t *testing.T) {
 		t.Errorf("wrote %d of %d (err %v), kept %d, want all written and %d kept", written, len(oversized), err, len(answer.body), maxCaptureBytes)
 	}
 }
+
+// Test flow:
+//  1. Write a stream longer than the capture's ceiling whose usage event comes last, in two writes.
+//  2. Assert the completion tokens are still the usage's, since the end of the stream is what is kept.
+func TestCaptureReadsTheUsageEventAfterMoreThanItsCeiling(t *testing.T) {
+	t.Parallel()
+	answer := newCapture(steppedClock())
+	filler := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"word \"}}]}\n\n")
+	for written := 0; written < 3*maxCaptureBytes; written += len(filler) {
+		_, _ = answer.Write(filler)
+	}
+	for _, chunk := range []string{"data: {\"usage\":{\"completion", "_tokens\":1000}}\n\ndata: [DONE]\n\n"} {
+		_, _ = answer.Write([]byte(chunk))
+	}
+
+	if got := answer.completionTokens(); got != 1000 || len(answer.body) != maxCaptureBytes {
+		t.Errorf("completion tokens = %d, kept %d bytes, want 1000 and %d", got, len(answer.body), maxCaptureBytes)
+	}
+}

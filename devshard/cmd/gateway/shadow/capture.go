@@ -28,8 +28,9 @@ func (c *capture) Write(chunk []byte) (int, error) {
 	if !c.seen {
 		c.seen, c.first = true, c.now()
 	}
-	if room := maxCaptureBytes - len(c.body); room > 0 {
-		c.body = append(c.body, chunk[:min(room, len(chunk))]...)
+	c.body = append(c.body, chunk...)
+	if excess := len(c.body) - maxCaptureBytes; excess > 0 {
+		c.body = c.body[:copy(c.body, c.body[excess:])]
 	}
 	return len(chunk), nil
 }

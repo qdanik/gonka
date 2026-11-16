@@ -1,6 +1,7 @@
 package shadow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -132,6 +133,10 @@ func newFixtureWithin(t *testing.T, lifetime context.Context, send sendFunc) *pr
 }
 
 func (f *probeFixture) request() scheduler.ProbeRequest {
+	params, skip := f.runner.Params(clientRequest(clientBody), 1_700_000_000)
+	if skip != scheduler.ProbeSkipNone {
+		panic("the client body must give a probe")
+	}
 	return scheduler.ProbeRequest{
 		Assignment: scheduler.Assignment{
 			Escrow:     probeEscrow,
@@ -140,7 +145,7 @@ func (f *probeFixture) request() scheduler.ProbeRequest {
 			EscrowHold: func() { f.held.Add(1) },
 		},
 		Model:  probeModel,
-		Params: f.runner.Params(probeModel, 1_700_000_000),
+		Params: params,
 	}
 }
 
@@ -306,5 +311,39 @@ func TestProbeEndsWithTheGateway(t *testing.T) {
 
 	if result.Outcome != OutcomeFailed || !errors.Is(result.Err, context.Canceled) {
 		t.Fatalf("result = %+v, want a failed probe ended by the gateway's stop", result)
+	}
+}
+
+// Test flow:
+//  1. Build probe params from a client request and keep a copy of the client's body.
+//  2. Bind a runner whose send streams a usage of 700 completion tokens, probe the nonce and await the result.
+//  3. Assert the ledger holds exactly one attempt, the probe's own, filed under `TerminalShadowProbe`, sent and counted for the usage the host streamed.
+//  4. Assert the client's params and body are as they were, so the probe left the client's charge inputs alone, and the probe's body is a body of its own.
+func TestProbeIsTheOnlyLedgerLineAndLeavesTheClientRequestAlone(t *testing.T) {
+	defer leakcheck.VerifyNoneStarted(t)()
+	fixture := newFixture(t, servedAnswer("data: {\"choices\":[],\"usage\":{\"completion_tokens\":700}}\n\ndata: [DONE]\n\n"))
+	client := clientRequest(clientBody)
+	before := bytes.Clone(client.Prompt)
+	params, skip := fixture.runner.Params(client, 1_700_000_000)
+	request := fixture.request()
+	request.Params = params
+
+	if skip != scheduler.ProbeSkipNone || !fixture.runner.Probe(request) {
+		t.Fatalf("skip = %v, want a probe that started", skip)
+	}
+	result := fixture.await(t)
+
+	if len(fixture.probes.attempts) != 1 {
+		t.Fatalf("ledger attempts = %+v, want exactly the probe's", fixture.probes.attempts)
+	}
+	attempt := fixture.probes.attempts[0]
+	if attempt.Terminal != accounting.TerminalShadowProbe || attempt.Nonce != result.Nonce || attempt.OutputTokens != 700 || !attempt.Sent {
+		t.Errorf("attempt = %+v, want the probe's nonce %d under %s with 700 output tokens", attempt, result.Nonce, accounting.TerminalShadowProbe)
+	}
+	if !bytes.Equal(client.Prompt, before) || client.MaxTokens != 50 || client.InputLength != uint64(len(before)) {
+		t.Errorf("client params = %+v, want the request as it was queued", client)
+	}
+	if probe := params.(user.InferenceParams); bytes.Equal(probe.Prompt, client.Prompt) || &probe.Prompt[0] == &client.Prompt[0] {
+		t.Errorf("probe body = %s, want a body of its own", probe.Prompt)
 	}
 }
