@@ -19,6 +19,8 @@ const ForcedTopLogprobs = 5
 type ModifiedRequest struct {
 	NewBody         []byte
 	AsksForLogprobs bool
+	// RequestMap equals json.Unmarshal of NewBody into a map, so a caller that reads fields need not decode NewBody again. Treat it as read-only.
+	RequestMap map[string]interface{}
 }
 
 func ModifyRequestBody(requestBytes []byte, defaultSeed int32) (*ModifiedRequest, error) {
@@ -82,10 +84,24 @@ func ModifyRequestBodyWithLogprobsMode(requestBytes []byte, defaultSeed int32, l
 		return nil, err
 	}
 
+	normalizeNumbers(requestMap)
 	return &ModifiedRequest{
 		NewBody:         modifiedRequestBytes,
 		AsksForLogprobs: asksForLogprobs,
+		RequestMap:      requestMap,
 	}, nil
+}
+
+// normalizeNumbers turns the ints this package stored (seed, n, top_logprobs, token limits) into the float64 a decode of the body gives.
+func normalizeNumbers(requestMap map[string]interface{}) {
+	for key, value := range requestMap {
+		switch number := value.(type) {
+		case int:
+			requestMap[key] = float64(number)
+		case int32:
+			requestMap[key] = float64(number)
+		}
+	}
 }
 
 func validateMessageContents(requestMap map[string]interface{}) error {

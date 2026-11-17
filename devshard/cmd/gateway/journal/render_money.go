@@ -22,6 +22,10 @@ func renderBurn(lines logSink, escrowID string, burned scheduler.Burn) {
 	if burned.RequestID != "" {
 		fields = append(fields, logkey.BurnedDuringRequest, burned.RequestID)
 	}
+	if burned.Reason == scheduler.GhostReasonAffinitySkip {
+		lines.Info("nonce burned to reach a request's host", fields...)
+		return
+	}
 	lines.Warn("nonce burned for nobody", fields...)
 }
 

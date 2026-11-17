@@ -35,8 +35,9 @@ type InferenceRequest struct {
 	Payload *PayloadJSON `json:"payload,omitempty"`
 	Stream  bool         `json:"stream,omitempty"` // hint: stream SSE deltas vs single JSON event
 	// ForceHeightSyncAnchor triggers manual-force Anchor on this message (policy hook).
-	ForceHeightSyncAnchor        bool  `json:"force_height_sync_anchor,omitempty"`
-	LogprobsOptimizationOverride *bool `json:"logprobs_optimization_override,omitempty"`
+	ForceHeightSyncAnchor        bool   `json:"force_height_sync_anchor,omitempty"`
+	LogprobsOptimizationOverride *bool  `json:"logprobs_optimization_override,omitempty"`
+	SessionKey                   string `json:"session_key,omitempty"`
 }
 
 // InferenceResponse is the JSON body returned by the inference endpoint.
@@ -193,6 +194,7 @@ func HostRequestToJSON(req host.HostRequest) (InferenceRequest, error) {
 		Nonce:                        req.Nonce,
 		ForceHeightSyncAnchor:        req.ForceHeightSyncAnchor,
 		LogprobsOptimizationOverride: req.LogprobsOptimizationOverride,
+		SessionKey:                   req.SessionKey,
 	}
 	ir.Payload = PayloadToJSON(req.Payload)
 	return ir, nil
@@ -214,6 +216,7 @@ func HostRequestFromJSON(ir InferenceRequest) (host.HostRequest, error) {
 		Nonce:                        ir.Nonce,
 		ForceHeightSyncAnchor:        ir.ForceHeightSyncAnchor,
 		LogprobsOptimizationOverride: ir.LogprobsOptimizationOverride,
+		SessionKey:                   ir.SessionKey,
 	}
 	req.Payload = PayloadFromJSON(ir.Payload)
 	return req, nil

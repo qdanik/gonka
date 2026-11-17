@@ -20,7 +20,7 @@ export ADMIN_KEY=<the value of DEVSHARD_ADMIN_API_KEY>
 | 503 on a healthy-looking gateway | `buffered_response_bytes` at the ceiling: non-streaming replies are holding the whole budget |
 | a model returns 401 to every caller but the admin | no `model_access` entry names it — set it through the `model_access` override |
 | the admin surface 404s | `DEVSHARD_ADMIN_API_KEY` is unset |
-| burns climbing | `ghost_nonces_burned_total` by reason — see [accounting.md](./accounting.md) |
+| burns climbing | `ghost_nonces_burned_total` by reason — see [accounting.md](./accounting.md); `affinity_skip` is the price of host affinity, bounded per request by `GATEWAY_AFFINITY_MAX_BURNS` and counted in `affinity_burns_total` ([routing.md](./routing.md), "Host affinity") |
 | prompts past a model's context reach hosts | the log line `prompt tokenizer could not be loaded`, `prompt tokenizer pin could not be read`, `model has no tokenizer the gateway reads` or `prompt tokenizer parse panicked` for the model, or no context length for it — see [operations.md](./operations.md), "The context check" |
 | shutdown reports "abandoned with work still running" | a host stopped answering and the drain hit the grace period; the votes it owed were not paid |
 

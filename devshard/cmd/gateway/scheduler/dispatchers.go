@@ -46,6 +46,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			now:                 s.now,
 			matchWait:           s.matchWait(),
 			maxConsecutiveBurns: s.maxConsecutiveBurns,
+			affinityMaxBurns:    s.affinityMaxBurns,
 			retirementReserve:   s.retirementReserveFor(escrow),
 			newTimer:            s.newTimer,
 			retire:              s.retire,

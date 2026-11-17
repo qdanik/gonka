@@ -13,7 +13,7 @@ import (
 // idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. See routing.md, "Idle dispatchers are reaped".
 const idleDispatcherGrace = 5 * time.Minute
 
-// Deps wires the runtime facts routing reads; Observer, Now, OnEscrowExhausted, OnReserveTaken and OnMoneyShort are optional.
+// Deps wires the runtime facts routing reads; Observer, Now, AffinityMaxBurns, OnEscrowExhausted, OnReserveTaken and OnMoneyShort are optional. AffinityMaxBurns is the burn budget of a targeted request, read per request; nil means no cap.
 type Deps struct {
 	Escrows           escrowSource
 	Capacity          escrowWeights
@@ -23,6 +23,7 @@ type Deps struct {
 	Config            *config.Holder
 	Observer          dispatchObserver
 	Now               func() time.Time
+	AffinityMaxBurns  func() int64
 	OnEscrowExhausted func(escrowID string, reason ExhaustionReason)
 	OnReserveTaken    func(escrowID string)
 	OnMoneyShort      func(model string)
@@ -30,18 +31,19 @@ type Deps struct {
 
 // Scheduler owns one actor per escrow. See routing.md, "Picking an escrow".
 type Scheduler struct {
-	escrows           escrowSource
-	capacity          escrowWeights
-	limiter           hostLimiter
-	perf              hostHealth
-	snapshots         snapshotSource
-	settings          *config.Holder
-	observer          dispatchObserver
-	now               func() time.Time
-	newTimer          func(time.Duration) (<-chan time.Time, func())
-	onEscrowExhausted func(escrowID string, reason ExhaustionReason)
-	onReserveTaken    func(escrowID string)
-	onMoneyShort      func(model string)
+	escrows            escrowSource
+	capacity           escrowWeights
+	limiter            hostLimiter
+	perf               hostHealth
+	snapshots          snapshotSource
+	settings           *config.Holder
+	observer           dispatchObserver
+	now                func() time.Time
+	affinityBurnBudget func() int64
+	newTimer           func(time.Duration) (<-chan time.Time, func())
+	onEscrowExhausted  func(escrowID string, reason ExhaustionReason)
+	onReserveTaken     func(escrowID string)
+	onMoneyShort       func(model string)
 
 	tieBreak atomic.Int64
 
@@ -76,20 +78,21 @@ func NewScheduler(deps Deps) (*Scheduler, error) {
 		deps.Now = time.Now
 	}
 	return &Scheduler{
-		escrows:           deps.Escrows,
-		capacity:          deps.Capacity,
-		limiter:           deps.Limiter,
-		perf:              deps.Perf,
-		snapshots:         deps.Snapshots,
-		settings:          deps.Config,
-		observer:          deps.Observer,
-		now:               deps.Now,
-		onEscrowExhausted: deps.OnEscrowExhausted,
-		onReserveTaken:    deps.OnReserveTaken,
-		onMoneyShort:      deps.OnMoneyShort,
-		dispatchers:       map[string]*dispatcher{},
-		blockedHosts:      map[string]map[string]bool{},
-		absentHosts:       map[string]map[string]bool{},
+		escrows:            deps.Escrows,
+		capacity:           deps.Capacity,
+		limiter:            deps.Limiter,
+		perf:               deps.Perf,
+		snapshots:          deps.Snapshots,
+		settings:           deps.Config,
+		observer:           deps.Observer,
+		now:                deps.Now,
+		affinityBurnBudget: deps.AffinityMaxBurns,
+		onEscrowExhausted:  deps.OnEscrowExhausted,
+		onReserveTaken:     deps.OnReserveTaken,
+		onMoneyShort:       deps.OnMoneyShort,
+		dispatchers:        map[string]*dispatcher{},
+		blockedHosts:       map[string]map[string]bool{},
+		absentHosts:        map[string]map[string]bool{},
 	}, nil
 }
 

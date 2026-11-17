@@ -4,6 +4,7 @@ package filters
 type Options struct {
 	Admin               bool
 	KeepClientStream    bool
+	Affinity            bool
 	DefaultMaxTokens    uint64
 	MaxTokensCap        uint64
 	RoutedModel         string
@@ -25,6 +26,7 @@ type Result struct {
 	MaxCompletionTokens     uint64
 	Logprobs                LogprobIntent
 	EmptyAnswerCountsTokens bool
+	Affinity                AffinityMaterial
 }
 
 func NormalizeRequest(body []byte, options Options) (Result, error) {

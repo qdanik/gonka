@@ -57,7 +57,7 @@ func TestClientPropagatesTraceAndRequestID(t *testing.T) {
 	ctx = observability.SetRequestID(ctx, "req-t5")
 	traceID := span.SpanContext().TraceID().String()
 
-	_, err = client.Acquire(ctx, "Qwen/Test", nil, "12")
+	_, err = client.Acquire(ctx, "Qwen/Test", nil, "12", "", nil)
 	require.NoError(t, err)
 	require.NoError(t, client.Release(ctx, "lock-1", gen.ReleaseOutcome_SUCCESS))
 

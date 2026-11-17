@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"devshard/cmd/gateway/affinity"
 )
 
 type armedTimer struct {
@@ -39,6 +41,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 	// Read before Advance: decide runs under the session's lock.
 	escalationBound := escalationNonceBound(snapshot.MaxNonce, groupSize)
 	burnLimit := d.maxConsecutiveBurns()
+	maxBurns := d.affinityMaxBurns()
 
 	var offered offer
 	decide := func(binding HostBinding) NonceIntent {
@@ -48,7 +51,11 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		if forcingDue {
 			gates = avail.servingOverFullWindows()
 		}
-		offered.decision = match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
+		d.lapseTargets(participants, gates)
+		offered.decision = d.matchWithinBurnCap(binding, participants, gates, maxBurns)
+		if skipped, skipping := offered.decision.(burn); skipping && skipped.waiter != nil {
+			offered.refusedWaiter = skipped.waiter
+		}
 		switch decided := offered.decision.(type) {
 		case serve:
 			cost := slotCost(decided.waiter.profile)
@@ -131,7 +138,11 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			}
 			d.recordGhost(burned)
 			offered.taken.releaseHold()
-			d.burnsInARow++
+			if outcome.kind != ghostAffinitySkip {
+				d.burnsInARow++
+			} else if outcome.waiter != nil {
+				outcome.waiter.skipped++
+			}
 			if d.spendBurnBudget(&burnBudget) {
 				return time.Time{}, false
 			}
@@ -144,6 +155,32 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		default:
 			d.failWaiting(fmt.Errorf("escrow %s: session offered no binding", d.escrowID))
 			return time.Time{}, false
+		}
+	}
+}
+
+func (d *dispatcher) matchWithinBurnCap(binding HostBinding, participants []string, gates availability, maxBurns int64) Decision {
+	for range len(d.waiting) {
+		decision := match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
+		skipped, skipping := decision.(burn)
+		if !skipping || skipped.kind != ghostAffinitySkip || skipped.waiter.skipped < maxBurns {
+			return decision
+		}
+		skipped.waiter.lapse(affinity.ExceptionMaxBurns)
+	}
+	return match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
+}
+
+func (d *dispatcher) lapseTargets(participants []string, gates availability) {
+	for _, queued := range d.waiting {
+		if queued.target == NoTarget || queued.abandoned.Load() {
+			continue
+		}
+		switch {
+		case !slices.Contains(participants, queued.target):
+			queued.lapse(affinity.ExceptionNotInGroup)
+		case gates.blocks(queued.target, queued) != blockNone:
+			queued.lapse(affinity.ExceptionGateBlocked)
 		}
 	}
 }
@@ -301,6 +338,7 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold, HostSlot: taken.hostSlot}
 	if served.deliver(pickResult{assignment: assignment}) {
 		d.recordAssigned(prepared.Nonce(), served.profile, served.enqueued)
+		d.recordAffinity(served, taken.participant)
 		return true
 	}
 	d.giveBack(taken)

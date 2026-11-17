@@ -18,6 +18,13 @@ type Tunables struct {
 	MaxBufferedRequestBytes                *int64   `json:"max_buffered_request_bytes,omitempty"`
 	MinClientReadBytesPerSecond            *int64   `json:"min_client_read_bytes_per_second,omitempty"`
 	WarmNewEscrows                         *bool    `json:"warm_new_escrows,omitempty"`
+	AffinityEnabled                        *bool    `json:"affinity_enabled,omitempty"`
+	AffinityTTLMS                          *int64   `json:"affinity_ttl_ms,omitempty"`
+	AffinityMaxEntries                     *int64   `json:"affinity_max_entries,omitempty"`
+	AffinityMaxPinAgeMS                    *int64   `json:"affinity_max_pin_age_ms,omitempty"`
+	AffinityShareCap                       *int64   `json:"affinity_share_cap,omitempty"`
+	AffinityMaxBurns                       *int64   `json:"affinity_max_burns,omitempty"`
+	AffinityMinCachedTokens                *int64   `json:"affinity_min_cached_tokens,omitempty"`
 	Disabled                               *bool    `json:"disabled,omitempty"`
 	DisabledMessage                        *string  `json:"disabled_message,omitempty"`
 	DisabledRedirectURL                    *string  `json:"disabled_redirect_url,omitempty"`

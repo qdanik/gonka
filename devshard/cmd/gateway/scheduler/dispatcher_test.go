@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/limits"
@@ -172,6 +173,8 @@ type recordingObserver struct {
 	forced         []forcedSend
 	assigned       []assignedNonce
 	queueWaits     []time.Duration
+	landed         int
+	exceptions     []affinity.Exception
 }
 
 type assignedNonce struct {
@@ -275,6 +278,24 @@ func (o *recordingObserver) ForcedSend(_ string, participant string, burnsInARow
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.forced = append(o.forced, forcedSend{participant: participant, burnsInARow: burnsInARow})
+}
+
+func (o *recordingObserver) AffinityLanded(string, string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.landed++
+}
+
+func (o *recordingObserver) AffinityException(_, _ string, reason affinity.Exception) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.exceptions = append(o.exceptions, reason)
+}
+
+func (o *recordingObserver) affinity() (landed int, exceptions []affinity.Exception) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.landed, append([]affinity.Exception(nil), o.exceptions...)
 }
 
 func (o *recordingObserver) forcedSends() []forcedSend {
@@ -382,6 +403,7 @@ type harnessConfig struct {
 	balance             uint64
 	feePerNonce         uint64
 	retirementReserve   uint64
+	affinityMaxBurns    func() int64
 }
 
 type harness struct {
@@ -465,6 +487,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		now:                 clock.Now,
 		matchWait:           matchWaitWindow,
 		maxConsecutiveBurns: burnLimit.Load,
+		affinityMaxBurns:    cfg.affinityMaxBurns,
 		retirementReserve:   func() uint64 { return cfg.retirementReserve },
 		newTimer:            clock.newTimer,
 		submitBuffer:        cmp.Or(cfg.submitBuffer, int(config.Defaults().Scheduler.DispatchQueueDepth)),

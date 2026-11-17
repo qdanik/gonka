@@ -131,3 +131,25 @@ func TestABurnWithANonceNamesIt(t *testing.T) {
 		"escrow", "escrow-1", "nonce", uint64(42), "host", "aaaaaaaa", "reason", scheduler.GhostReasonWindowFull,
 	}})
 }
+
+// Test flow:
+//  1. Build a journal with a `logcapture.Recorder`.
+//  2. Record a `GhostBurned` event whose reason is `affinity_skip`.
+//  3. Flush the journal.
+//  4. Assert the line is an info line naming the host and reason, and no warning was logged for a burn the gateway chose.
+func TestABurnTakenToReachAHostIsInformationNotAWarning(t *testing.T) {
+	lines := &logcapture.Recorder{}
+	events := newJournal(t, Settings{Lines: lines})
+
+	events.GhostBurned("escrow-1", scheduler.Burn{Nonce: 3, Participant: hostAlpha, Reason: scheduler.GhostReasonAffinitySkip})
+	events.Flush()
+
+	lines.RequireLine(t, logcapture.Entry{Level: "info", Msg: "nonce burned to reach a request's host", Fields: []any{
+		"escrow", "escrow-1", "nonce", uint64(3), "host", "aaaaaaaa", "reason", scheduler.GhostReasonAffinitySkip,
+	}})
+	for _, entry := range lines.All() {
+		if entry.Level == "warn" {
+			t.Fatalf("a burn the gateway chose logged a warning: %+v", entry)
+		}
+	}
+}

@@ -41,6 +41,7 @@ func (c *raceCoordinator) settleClaims() {
 // crownWinner is the single place one attempt becomes the client's answer, so the reason travels with it. A pick still waiting is given up: its nonce would serve nobody. See race.md, "Crowning".
 func (c *raceCoordinator) crownWinner(attempt *liveAttempt, reason string) {
 	c.winner = attempt
+	c.rememberWinner(attempt.participant)
 	c.stopPicking()
 	c.traceStep(RaceStep{
 		Kind: RaceStepAttemptCrowned, RequestID: c.request.RequestID, EscrowID: c.escrowID,
