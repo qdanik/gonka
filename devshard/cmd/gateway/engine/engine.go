@@ -413,25 +413,31 @@ func (e *Engine) poster(escrowID string, params any) TimeoutPoster {
 func (e *Engine) queueVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, afterPost, markSettled func()) {
 	due := func() time.Time { return earliestDue(steps, poster) }
 	unripe := func() bool { return due().After(e.settles.now()) }
+	var settle bool
 	task := settleTask{
 		deadline: due,
 		wake:     e.stopping,
 		post: func() {
 			// A vote not yet due at Stop is left owed in the store or to the next boot's sweep.
 			if e.stopping.Err() != nil && unripe() {
-				markSettled()
+				settle = true
 				return
 			}
 			ctx, release := e.cancelUnripeOnStop(settleContext(outcome.RequestID), unripe)
 			defer release()
 			retries := settleSteps(ctx, poster, steps, outcome.Lifecycle.EscrowMissing, e.reportTimeout)
 			if ctx.Err() != nil {
-				markSettled()
+				settle = true
 				return
 			}
 			e.payRefusals(outcome.EscrowID, steps, retries)
 			afterPost()
-			e.retryRefusedVotes(outcome, poster, retries, markSettled, 0)
+			settle = e.retryRefusedVotes(outcome, poster, retries, markSettled, 0)
+		},
+		settled: func() {
+			if settle {
+				markSettled()
+			}
 		},
 	}
 	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
@@ -447,14 +453,15 @@ func (e *Engine) cancelUnripeOnStop(ctx context.Context, unripe func() bool) (co
 	return ctx, func() { stop(); cancel() }
 }
 
-func (e *Engine) retryRefusedVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, markSettled func(), round int) {
+// retryRefusedVotes reports whether it queued no further retry, which leaves the markSettled call to the caller.
+func (e *Engine) retryRefusedVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, markSettled func(), round int) bool {
 	if len(steps) == 0 || round >= refusedVoteRetries || e.stopping.Err() != nil {
 		if e.stopping.Err() == nil {
 			e.payRefusals(outcome.EscrowID, steps, nil)
 		}
-		markSettled()
-		return
+		return true
 	}
+	var settle bool
 	retryAt := e.settles.now().Add(refusedVoteFirstRetryDelay << round)
 	task := settleTask{
 		deadline: func() time.Time { return retryAt },
@@ -462,10 +469,16 @@ func (e *Engine) retryRefusedVotes(outcome RaceOutcome, poster TimeoutPoster, st
 		post: func() {
 			remaining := postTimeouts(settleContext(outcome.RequestID), poster, steps, outcome.Lifecycle.EscrowMissing, e.reportTimeout)
 			e.payRefusals(outcome.EscrowID, steps, remaining)
-			e.retryRefusedVotes(outcome, poster, remaining, markSettled, round+1)
+			settle = e.retryRefusedVotes(outcome, poster, remaining, markSettled, round+1)
+		},
+		settled: func() {
+			if settle {
+				markSettled()
+			}
 		},
 	}
 	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
+	return false
 }
 
 func (e *Engine) reportTimeout(event TimeoutEvent) {
