@@ -113,6 +113,12 @@ func (s *Scheduler) retirementReserveFor(escrow Escrow) func() uint64 {
 	return func() uint64 { return s.retirementReserve(escrow.Model, s.snapshots.Snapshot()) }
 }
 
+// PoCServing reports whether a participant passes the PoC rung of the drain's ladder for the model; everyone does while no set is loaded.
+func PoCServing(snapshot chain.PhaseSnapshot, model string) func(participant string) bool {
+	preserved := pocPreserved(snapshot, model)
+	return func(participant string) bool { return preserved == nil || preserved[participant] }
+}
+
 // pocPreserved prefers the model's own set; a nil set means not loaded yet, so everybody counts as preserved. See rules.md, "8. Fail-closed and fail-open are chosen per signal".
 func pocPreserved(snapshot chain.PhaseSnapshot, model string) map[string]bool {
 	preserved := snapshot.PreservedByModel[model]

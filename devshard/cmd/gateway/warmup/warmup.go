@@ -63,6 +63,7 @@ type Prober struct {
 	epochs   Epochs
 	posters  Posters
 	timeouts Timeouts
+	serving  Serving
 	probes   Probes
 	narrator warmupNarrator
 	probe    func(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error)
@@ -244,9 +245,9 @@ func (w *Prober) Serve(escrows Escrows) {
 	}
 }
 
-func (w *Prober) Settle(posters Posters, timeouts Timeouts, probes Probes) {
+func (w *Prober) Settle(posters Posters, timeouts Timeouts, serving Serving, probes Probes) {
 	if w != nil {
-		w.posters, w.timeouts, w.probes = posters, timeouts, probes
+		w.posters, w.timeouts, w.serving, w.probes = posters, timeouts, serving, probes
 	}
 }
 

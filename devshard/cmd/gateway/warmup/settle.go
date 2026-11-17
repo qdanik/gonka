@@ -12,10 +12,14 @@ type Timeouts interface {
 	RecordTimeout(event engine.TimeoutEvent)
 }
 
+// Serving names, for one model, the participants that can serve now; it is read when a vote round starts, not when the probe ends.
+type Serving func(model string) func(participant string) bool
+
 // Voter settles a nonce the gateway committed outside the scheduler's serving path, which nothing else ever would.
 type Voter struct {
 	Posters  Posters
 	Timeouts Timeouts
+	Serving  Serving
 }
 
 // Settle resolves a nonce no reply finished and reports the vote it posted; voted is false when no poster could be resolved, which it records as skipped.
@@ -46,10 +50,18 @@ func (v Voter) Settle(ctx context.Context, escrowID, model string, params user.I
 	v.recordTimeout(event)
 
 	posted = event
+	ctx = user.WithReceiptDiscovery(ctx, v.servingAtVote(model))
 	vote, err := poster.SettleTimeout(ctx, engine.TimeoutStep{Nonce: nonce, StartedAt: time.Unix(params.StartedAt, 0)})
 	posted.Action, posted.Reason = engine.TimeoutOutcome(vote, err, false)
 	v.recordTimeout(posted)
 	return posted, true
+}
+
+func (v Voter) servingAtVote(model string) func() func(participant string) bool {
+	if v.Serving == nil {
+		return nil
+	}
+	return func() func(participant string) bool { return v.Serving(model) }
 }
 
 func (v Voter) recordTimeout(event engine.TimeoutEvent) {
@@ -60,7 +72,7 @@ func (v Voter) recordTimeout(event engine.TimeoutEvent) {
 
 // settleUnfinishedProbe resolves a nonce committed outside the scheduler, which nothing else ever would.
 func (w *Prober) settleUnfinishedProbe(ctx context.Context, escrowID, model string, params user.InferenceParams, nonce uint64, acknowledged bool) {
-	posted, voted := Voter{Posters: w.posters, Timeouts: w.timeouts}.Settle(ctx, escrowID, model, params, nonce, acknowledged)
+	posted, voted := Voter{Posters: w.posters, Timeouts: w.timeouts, Serving: w.serving}.Settle(ctx, escrowID, model, params, nonce, acknowledged)
 	if voted && w.narrator != nil {
 		w.narrator.WarmupVoted(escrowID, nonce, posted.Action, posted.Reason)
 	}

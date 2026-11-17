@@ -4163,6 +4163,11 @@ func (s *Session) VoteTimeout(ctx context.Context, nonce uint64, sendTime time.T
 		}
 	}
 
+	return s.runVoteRound(ctx, nonce, reason, payload, result, logFields)
+}
+
+// runVoteRound asks the verifiers and publishes the outcome; a receipt discovery round whose recovered receipt does not land is asked again in full.
+func (s *Session) runVoteRound(ctx context.Context, nonce uint64, reason types.TimeoutReason, payload *host.InferencePayload, result TimeoutResult, logFields func(extra ...any) []any) (TimeoutResult, bool, error) {
 	verifiers := s.TimeoutVerifiers()
 
 	votes, recovery, _, verifierError, err := s.collectTimeoutVotes(ctx, nonce, reason, payload, verifiers, nil)
@@ -4231,6 +4236,9 @@ func (s *Session) VoteTimeout(ctx context.Context, nonce uint64, sendTime time.T
 		}
 		// The txs were returned but did not apply. They are not evidence the
 		// work completed, so the vote stands.
+		if _, discovered := receiptDiscoveryFrom(ctx); discovered && reason == types.TimeoutReason_TIMEOUT_REASON_REFUSED {
+			return s.runVoteRound(withoutReceiptDiscovery(ctx), nonce, reason, payload, result, logFields)
+		}
 	}
 
 	if verifierError != "" {
@@ -4481,6 +4489,9 @@ func (s *Session) sleepRefusal(ctx context.Context, nonce uint64, sendTime time.
 		if !nextHeartbeat.IsZero() && nextHeartbeat.Before(wake) {
 			wake = nextHeartbeat
 		}
+		if poll := time.Now().Add(timeoutClosePollInterval); closed != nil && timeoutClosePollInterval > 0 && poll.Before(wake) {
+			wake = poll
+		}
 		timer := time.NewTimer(time.Until(wake))
 		select {
 		case <-ctx.Done():
@@ -4498,11 +4509,11 @@ func (s *Session) sleepRefusal(ctx context.Context, nonce uint64, sendTime time.
 }
 
 // TimeoutHeartbeatInterval controls how often timeout_waiting logs are emitted.
-var TimeoutHeartbeatInterval = time.Minute
+var TimeoutHeartbeatInterval = 10 * time.Minute
 
 // timeoutClosePollInterval is how often a deadline wait rechecks whether the
 // record has already closed. Zero disables the recheck.
-var timeoutClosePollInterval = 250 * time.Millisecond
+var timeoutClosePollInterval = 5 * time.Second
 
 // sleepUntilDeadlineWithHeartbeat waits until deadline and returns true. It
 // returns false when ctx ends first. done, when set, is polled; once it
@@ -4691,6 +4702,7 @@ func (s *Session) collectTimeoutVotes(
 		idx          int
 		verifier     TimeoutVerifier
 		verifierAddr string
+		gate         <-chan struct{}
 	}
 	seen := make(map[string]bool)
 	seen[executorAddr] = true
@@ -4702,6 +4714,27 @@ func (s *Session) collectTimeoutVotes(
 		}
 		seen[addr] = true
 		deduped = append(deduped, addrVerifier{idx: idx, verifier: v, verifierAddr: addr})
+	}
+
+	firstTier := len(deduped)
+	var openRest chan struct{}
+	discovery, discovering := receiptDiscoveryFrom(ctx)
+	discovering = discovering && reason == types.TimeoutReason_TIMEOUT_REASON_REFUSED
+	if discovering && discovery.serving != nil {
+		serving := discovery.serving()
+		sort.SliceStable(deduped, func(a, b int) bool {
+			return serving(deduped[a].verifierAddr) && !serving(deduped[b].verifierAddr)
+		})
+		firstTier = 0
+		for firstTier < len(deduped) && serving(deduped[firstTier].verifierAddr) {
+			firstTier++
+		}
+		if firstTier > 0 && firstTier < len(deduped) {
+			openRest = make(chan struct{})
+			for i := firstTier; i < len(deduped); i++ {
+				deduped[i].gate = openRest
+			}
+		}
 	}
 
 	type voteResult struct {
@@ -4727,8 +4760,16 @@ func (s *Session) collectTimeoutVotes(
 
 	results := make(chan voteResult, len(deduped))
 	for _, av := range deduped {
-		logging.Stage(ctx, "timeout_vote_requested", logFields(av.verifierAddr)...)
 		go func(av addrVerifier) {
+			if av.gate != nil {
+				select {
+				case <-av.gate:
+				case <-ctx.Done():
+					results <- voteResult{err: fmt.Errorf("%w: %w", errVoteNotSent, ctx.Err()), verifierIdx: av.idx, verifierAddr: av.verifierAddr}
+					return
+				}
+			}
+			logging.Stage(ctx, "timeout_vote_requested", logFields(av.verifierAddr)...)
 			// Serialize VerifyTimeout per verifier host so a single bad
 			// executor producing many simultaneous timeouts cannot open
 			// MaxConcurrentVerifierRPCs+ connections to any one verifier.
@@ -4821,6 +4862,7 @@ func (s *Session) collectTimeoutVotes(
 			idx:          av.idx,
 			verifier:     av.verifier,
 			verifierAddr: av.verifierAddr,
+			gate:         av.gate,
 		})
 	}
 
@@ -4834,7 +4876,12 @@ func (s *Session) collectTimeoutVotes(
 	var accWeight uint32
 	var errors, rejects, invalid int
 	errorClasses := make(map[string]int)
+	var receiptFound bool
 	for i := 0; i < expected; i++ {
+		if openRest != nil && i == firstTier {
+			close(openRest)
+			openRest = nil
+		}
 		res := <-results
 		if res.err != nil {
 			errors++
@@ -4907,6 +4954,7 @@ func (s *Session) collectTimeoutVotes(
 				}
 				seenRecovery[key] = struct{}{}
 				recovery = append(recovery, tx)
+				receiptFound = receiptFound || discovering
 			}
 			logging.Stage(ctx, "timeout_vote_result",
 				logFields(
@@ -4918,7 +4966,7 @@ func (s *Session) collectTimeoutVotes(
 				)...,
 			)
 		}
-		if accWeight > voteThreshold {
+		if accWeight > voteThreshold || receiptFound {
 			break
 		}
 	}

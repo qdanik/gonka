@@ -329,13 +329,16 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	sessions := api.NewSessions(escrows)
 	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
 	probeTimeouts := probeVotes{recorder: raceRecorder, events: events}
-	prober.Settle(sessions.Poster, probeTimeouts, events)
+	probeServing := func(model string) func(participant string) bool {
+		return scheduler.PoCServing(observer.Snapshot(), model)
+	}
+	prober.Settle(sessions.Poster, probeTimeouts, probeServing, events)
 	prompts := promptTokens(sources.ModelSnapshots, observer)
 	e2e := env.LoadE2E()
 	shadowProbes.Bind(shadow.Binding{
 		Escrows:  escrows,
 		Lifetime: ctx,
-		Voter:    warmup.Voter{Posters: sessions.Poster, Timeouts: probeTimeouts},
+		Voter:    warmup.Voter{Posters: sessions.Poster, Timeouts: probeTimeouts, Serving: probeServing},
 		Probes:   events,
 		Outcomes: shadowOutcomes{recorder: metrics.NewShadowProbeRecorder(telemetry), events: events},
 		HardTimeout: func() time.Duration {
