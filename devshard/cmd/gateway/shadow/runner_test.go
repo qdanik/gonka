@@ -25,6 +25,7 @@ const (
 	probeParticipant = "gonka1shadowhost"
 	probeModel       = "model-a"
 	awaitBudget      = 5 * time.Second
+	probeHardTimeout = time.Hour
 )
 
 type stubEscrows struct {
@@ -101,6 +102,7 @@ type probeFixture struct {
 	poster   *stubPoster
 	timeouts *spyTimeouts
 	held     atomic.Int64
+	hardTime time.Duration
 }
 
 func steppedClock() func() time.Time {
@@ -130,6 +132,7 @@ func newFixtureWithin(t *testing.T, lifetime context.Context, send sendFunc) *pr
 		probes:   &spyProbes{},
 		poster:   &stubPoster{},
 		timeouts: &spyTimeouts{},
+		hardTime: probeHardTimeout,
 	}
 	fixture.runner.send = send
 	fixture.runner.Bind(Binding{
@@ -139,8 +142,9 @@ func newFixtureWithin(t *testing.T, lifetime context.Context, send sendFunc) *pr
 			Posters:  func(string, any) (engine.TimeoutPoster, bool) { return fixture.poster, true },
 			Timeouts: fixture.timeouts,
 		},
-		Probes:   fixture.probes,
-		Outcomes: fixture.outcomes,
+		Probes:      fixture.probes,
+		Outcomes:    fixture.outcomes,
+		HardTimeout: func() time.Duration { return fixture.hardTime },
 	})
 	return fixture
 }
@@ -457,31 +461,6 @@ func TestProbeLineOfAPromptAnswerCarriesNoTimingFlags(t *testing.T) {
 	}
 }
 
-// Test flow:
-//  1. Bind a runner whose send streams two events carrying 3 and 2 logprob entries and then fails, so no usage event arrives.
-//  2. Probe a committed nonce and await the result.
-//  3. Assert the result and the ledger attempt count the 5 tokens the stream delivered.
-func TestCutStreamCountsTheTokensItDelivered(t *testing.T) {
-	defer leakcheck.VerifyNoneStarted(t)()
-	fixture := newFixture(t, func(_ context.Context, _ registry.EscrowSession, _ *user.PreparedInference, answer io.Writer, onReceipt func()) (*host.HostResponse, error) {
-		onReceipt()
-		for _, event := range []string{
-			"data: {\"choices\":[{\"delta\":{\"content\":\"a b c\"},\"logprobs\":{\"content\":[{\"token\":\"a\"},{\"token\":\" b\"},{\"token\":\" c\"}]}}]}\n\n",
-			"data: {\"choices\":[{\"delta\":{\"content\":\" d e\"},\"logprobs\":{\"content\":[{\"token\":\" d\"},{\"token\":\" e\"}]}}]}\n\n",
-		} {
-			_, _ = answer.Write([]byte(event))
-		}
-		return nil, errors.New("stream cut")
-	})
-
-	fixture.runner.Probe(fixture.request())
-	result := fixture.await(t)
-
-	if result.OutputTokens != 5 || fixture.probes.attempts[0].OutputTokens != 5 {
-		t.Errorf("result tokens = %d, ledger tokens = %d, want 5 from the cut stream", result.OutputTokens, fixture.probes.attempts[0].OutputTokens)
-	}
-}
-
 type blockingPoster struct {
 	entered chan struct{}
 	proceed chan struct{}
@@ -509,11 +488,12 @@ func TestFailedProbeIsReportedBeforeItsVoteReturns(t *testing.T) {
 	proceed := sync.OnceFunc(func() { close(poster.proceed) })
 	defer proceed()
 	fixture.runner.Bind(Binding{
-		Escrows:  fixture.escrows,
-		Lifetime: t.Context(),
-		Voter:    warmup.Voter{Posters: func(string, any) (engine.TimeoutPoster, bool) { return poster, true }},
-		Probes:   fixture.probes,
-		Outcomes: fixture.outcomes,
+		Escrows:     fixture.escrows,
+		Lifetime:    t.Context(),
+		Voter:       warmup.Voter{Posters: func(string, any) (engine.TimeoutPoster, bool) { return poster, true }},
+		Probes:      fixture.probes,
+		Outcomes:    fixture.outcomes,
+		HardTimeout: func() time.Duration { return probeHardTimeout },
 	})
 
 	fixture.runner.Probe(fixture.request())

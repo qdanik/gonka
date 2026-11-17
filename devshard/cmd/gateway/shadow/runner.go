@@ -50,6 +50,8 @@ type Binding struct {
 	Voter    warmup.Voter
 	Probes   warmup.Probes
 	Outcomes Outcomes
+	// HardTimeout is read once per probe: the engine's bound on a client attempt, the only bound a probe has.
+	HardTimeout func() time.Duration
 }
 
 // Runner satisfies scheduler.ShadowProber. See ../docs/routing.md, "Shadow participants".
@@ -98,7 +100,7 @@ type sentProbe struct {
 
 func (r *Runner) run(probe sentProbe) {
 	lifetime := r.binding.Lifetime
-	sendCtx, cancelSend := context.WithTimeout(lifetime, probeTimeout)
+	sendCtx, cancelSend := context.WithTimeout(lifetime, r.binding.HardTimeout())
 	defer cancelSend()
 
 	answer := newCapture(r.now)
@@ -120,7 +122,7 @@ func (r *Runner) run(probe sentProbe) {
 	}
 	read := meter.Outcome(confirmedAt, err)
 
-	result := r.result(probe, answer, read, total, err)
+	result := r.result(probe, answer, total, err)
 	r.record(result, answered, read)
 	probe.session.ArmQuietSettle()
 	if err == nil {
@@ -159,7 +161,7 @@ func dispatch(ctx context.Context, session registry.EscrowSession, prepared *use
 	return response, err
 }
 
-func (r *Runner) result(probe sentProbe, answer *capture, read engine.AttemptOutcome, total time.Duration, err error) Result {
+func (r *Runner) result(probe sentProbe, answer *capture, total time.Duration, err error) Result {
 	result := Result{
 		Escrow:      probe.request.Assignment.Escrow,
 		Participant: probe.request.Assignment.Host,
@@ -171,9 +173,6 @@ func (r *Runner) result(probe sentProbe, answer *capture, read engine.AttemptOut
 	}
 	result.FirstToken, result.Streamed = answer.firstToken()
 	result.OutputTokens = answer.completionTokens()
-	if result.OutputTokens == 0 {
-		result.OutputTokens = uint64(read.OutputTokens())
-	}
 	if err != nil {
 		result.Outcome = OutcomeFailed
 	}
