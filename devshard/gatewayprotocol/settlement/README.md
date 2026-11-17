@@ -6,7 +6,7 @@
 - `Root`: the settlement state root, `state.ComputeHostStatsHash` over the payload's host stats followed by `state.ComputeStateRootFromRestHash` in `types.PhaseSettlement` with the payload's rest hash, fees and version. It hashes the host stats exactly as given and never filters them, so a caller gets the root of the map it passed.
 - `PresentStats`: a copy of a host-stats map without its nil entries.
 - `HostStatsBySlot` and `SignaturesBySlot`: the two lists of the message in ascending slot order. `HostStatsBySlot` expects every entry to be non-nil.
-- `ChooseSignatures` over a `SignatureSource`, which `*user.Session` satisfies: the signatures a settle posts, as `Signatures`. It posts the session's re-checked set (`SettlementSignatures`) when that reaches quorum. When the re-check errors, it posts every signature the session holds at the nonce (`SignaturesAt`) when they cover at least the chain's quorum of slots, more than two thirds of them, and reports the shortfall beside them in `Shortfall`; below that it returns an error wrapping the shortfall and the settle posts nothing.
+- `ChooseSignatures` over a `SignatureSource`, which `*user.Session` satisfies: the signatures a settle posts, as `Signatures`. It posts the session's re-checked set (`SettlementSignatures`) when the re-check passes. When the re-check errors, it posts every signature the session holds at the nonce (`SignaturesAt`) when they cover at least the chain's quorum of slots, more than two thirds of them, and reports the shortfall beside them in `Shortfall`; below that it returns an error wrapping the shortfall and the settle posts nothing.
 
 ## How the gateways use it
 

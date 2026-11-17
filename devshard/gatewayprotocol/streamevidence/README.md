@@ -19,9 +19,9 @@
 
 A verifier needs the whole stream. It hashes the payload and compares the hash with the response hash or the served hash in the executor's signed Finish, and the executor hashed its whole body (`devshard/host/timeout.go`, `VerifyErrorMiss`). A truncated prefix serializes to other bytes. Every verifier rejects it as `hash_mismatch`, the claim gathers no votes, and the executor is paid for its error. So the bound decides which error streams can be claimed at all. Two gateways with different bounds pay the same host differently for the same stream, which is why the bound is a protocol value and lives here. No verifier-side limit sits near it: the verify request is read up to 10 MiB.
 
-The bound is 64 KiB rather than larger because it is paid on the success path too. Both gateways retain the lines of every non-probe streamed attempt from its first read until the attempt shows no error, so every long successful stream holds up to the bound while it streams. The new gateway charges retention to no budget, so its worst case is the bound times the attempts in flight. devshardctl charges it to its participant and global classify budgets, which it shares with classify reassembly. The cost of 64 KiB is that an error following more than 64 KiB of streamed data lines cannot be claimed by either gateway.
+The bound is 64 KiB rather than larger because it is paid on the success path too. Both gateways retain the lines of every non-probe streamed attempt from its first read until the attempt shows no error, so every long successful stream holds up to the bound while it streams. `devshard/cmd/gateway` charges retention to no budget, so its worst case is the bound times the attempts in flight. devshardctl charges it to its participant and global classify budgets, which it shares with classify reassembly. The cost of 64 KiB is that an error following more than 64 KiB of streamed data lines cannot be claimed by either gateway.
 
-Each gateway may stop below the bound when its own memory budget refuses: devshardctl when its participant or global classify budget is full, the new gateway when its reassembly budget drops bytes. Without that pressure both keep the same prefix of the same stream. When the retained prefix holds no error line, `ProvesErrorMiss` fails on it and neither gateway posts a claim.
+Each gateway may stop below the bound when its own memory budget refuses: devshardctl when its participant or global classify budget is full, `devshard/cmd/gateway` when its reassembly budget drops bytes. Without that pressure both keep the same prefix of the same stream. When the retained prefix holds no error line, `ProvesErrorMiss` fails on it and neither gateway posts a claim.
 
 ## What it does not own
 
@@ -29,7 +29,7 @@ The retainer: what a gateway does when the bound is hit, and the memory budget i
 
 ## The golden
 
-`testdata/newlineless_final_error.sse` is a copy of the terminal-error fixture in `devshard/cmd/gateway/filters/testdata/sse/`: one error event with no final newline. `testdata/newlineless_final_error.json` is the payload devshardctl's and the new gateway's own evidence code each produced from it, byte for byte the same, before both moved onto this package. The golden changes only together with a change to the evidence rule, which both gateways then pick up.
+`testdata/newlineless_final_error.sse` is a copy of the terminal-error fixture in `devshard/cmd/gateway/filters/testdata/sse/`: one error event with no final newline. `testdata/newlineless_final_error.json` is the payload `Payload` serializes from it, byte for byte, as `TestPayloadOfATerminalErrorStreamMatchesTheGolden` checks. The golden changes only together with a change to the evidence rule, which both gateways then pick up.
 
 ## The long error stream
 

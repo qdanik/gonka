@@ -1,5 +1,7 @@
 # `store` — the control plane on disk
 
+The `store` package owns the contract for the control-plane state the gateway keeps, and its backends implement it. Read this before you add a table, a column or a query.
+
 One contract, two backends: SQLite at `<storageDir>/gateway.db` or a dedicated Postgres database, holding what must survive a restart. Callers depend on the interfaces in `contract.go`, never on a backend; `app/store_factory.go` picks the backend from `DEVSHARD_STORAGE_MODE`.
 
 ## Layout
@@ -32,7 +34,7 @@ The pool is one connection, kept for the life of the process. SQLite serializes 
 
 Migrations run in order, one transaction per version, and the applied version is recorded in `schema_version` — so `Open` is idempotent and a version that failed part-way is never recorded as applied.
 
-The list is append-only: a version number names whatever statement held that slot when a database recorded it, so replacing an entry leaves every database that already recorded its number without the new statement. The slot that holds `chain_epoch` is one an earlier build spent on `on_hold`, so a migration that only adds a column is matched by name as well (`applyMigration`): it is skipped when the column is already there, and after the numbered pass every such migration below the recorded version is run again and adds whatever column is missing. Any other kind of migration has no such repair, so append, never replace.
+The list is append-only: a version number names whatever statement held that slot when a database recorded it, so replacing an entry leaves every database that already recorded its number without the new statement. A database can have recorded the number of the slot that holds `chain_epoch` without that column, so a migration that only adds a column is matched by name as well (`applyMigration`): it is skipped when the column is already there, and after the numbered pass every such migration below the recorded version is run again and adds whatever column is missing. Any other kind of migration has no such repair, so append, never replace.
 
 ### The devshardctl-database guard
 
@@ -44,7 +46,7 @@ The guard is declared apart from the migrations list because it decides whether 
 
 `postgres.Open` reads the libpq `PG*` variables (or `Options.ConnectionString`) and boots in one transaction under an advisory lock, with the pool's timeouts lifted.
 
-The boot fails with `ErrDurabilityOff` when `synchronous_commit` or `fsync` is off, with `ErrPlaintextRemoteHost` for a remote host without TLS, and with `ErrForeignDatabase` for a database that holds tables and no `gateway_database_marker`; an empty database gets the marker. A schema newer than this build knows is logged, not refused.
+Every connection pins `synchronous_commit` on. The boot fails with `ErrDurabilityOff` when `fsync` is off, with `ErrPlaintextRemoteHost` for a remote host without TLS, and with `ErrForeignDatabase` for a database that holds tables and no `gateway_database_marker`; an empty database gets the marker. A schema newer than this build knows is logged, not refused.
 
 Connections must be read-write, so a standby is skipped, and every statement runs under `PG_OPERATION_TIMEOUT`.
 
@@ -114,7 +116,7 @@ Its layout is fixed-width where `RFC3339Nano` is not. Retention compares and ord
 
 `NewOwedVotes` registers a single writer with the store, and `Store.Close` drains it, so a vote still owed when the gateway stops is on disk when the store closes. A row holds what a refusal vote needs and the session cannot rebuild — escrow, nonce, start stamp and the prompt — plus the request, participant and model its events carry; the table is keyed by `(escrow_id, nonce)`.
 
-Like the ledger, the writer sits behind a queue of `owedVoteQueueDepth` (1024) and sheds rather than blocks; saves and deletes share the queue, so a delete never runs ahead of its save. A prompt over `maxOwedVotePromptBytes` (1 MiB; a request body may be 10 MiB) is not kept. A shed or failed save, and a prompt over the bound, leave the vote owed in memory only, as it was before the book existed: a restart loses it and finalize pays the nonce in full. A shed or failed delete leaves a row the next boot replays, which the session skips as closed and the engine then deletes. `Stats` counts every shed write, a write after the drain included, as `Dropped` and every write the database refused as `Failed`; a prompt over the bound is not counted. The table holds roughly the refusals of the last minute and a bit, since a vote is deleted once it posts.
+Like the ledger, the writer sits behind a queue of `owedVoteQueueDepth` (1024) and sheds rather than blocks; saves and deletes share the queue, so a delete never runs ahead of its save. A prompt over `maxOwedVotePromptBytes` (1 MiB; a request body may be 10 MiB) is not kept. A shed or failed save, and a prompt over the bound, leave the vote owed in memory only: a restart loses it and finalize pays the nonce in full. A shed or failed delete leaves a row the next boot replays, which the session skips as closed and the engine then deletes. `Stats` counts every shed write, a write after the drain included, as `Dropped` and every write the database refused as `Failed`; a prompt over the bound is not counted. The table holds roughly the refusals of the last minute and a bit, since a vote is deleted once it posts.
 
 ## The completion journal
 

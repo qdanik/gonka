@@ -38,7 +38,7 @@ Reviewers are read-only. They report; you fix.
 
 Hand these to both reviewers. A breach is a finding.
 
-- **Gateway-only.** A change never alters code a host binary runs. Code outside `devshard/cmd/gateway`, `devshard/gatewayprotocol` and the call sites in `devshard/cmd/devshardctl` is touched only when hosts never run it; prove it with `go list -deps` and the callers. Shared packages (`devshard/user`, `state`, `storage`, `types`, `host`) are not edited for a gateway's sake.
+- **Gateway-only.** A change never alters code a host binary runs. Code outside `devshard/cmd/gateway`, `devshard/gatewayprotocol` and the call sites in `devshard/cmd/devshardctl` is touched only when hosts never run it; prove it with `go list -deps` and the callers. Shared packages (`devshard/user`, `state`, `storage`, `types`, `host`) are not edited for a gateway's sake, except for the money-losing defects that `devshard/cmd/gateway/docs/rules.md` lists under "Boundaries it declines to cross".
 - **Layers.** `devshard/gatewayprotocol` holds the rules that hosts, verifiers or the chain judge apply to both gateways alike, with no runtime imports; `devshard/cmd/gateway` is the new gateway's runtime; `devshard/cmd/devshardctl` is the current gateway and calls `gatewayprotocol` for the shared rules.
 - **One copy of a protocol rule.** A protocol rule written again in `cmd/gateway` or `devshardctl` instead of called from `gatewayprotocol` is a finding, whichever gateway holds the copy.
 - **The guard.** `gatewayprotocol/guard_test.go` stays green: every package has a row in its layer table and a `README.md`, imports stay inside the row, and `go list -deps ./cmd/devshardd ./cmd/devshard-host | grep gatewayprotocol` prints nothing.
@@ -50,7 +50,7 @@ Hand these to both reviewers. A breach is a finding.
 - **State changes through methods** where that fits, rather than one type assigning another's fields.
 - **File size.** A production file over 500 lines is split; test files may be longer.
 - **Tests** carry a `// Test flow:` block, are deterministic (no real clock, network or sleeps), and test behaviour, not implementation.
-- **Docs.** A new environment variable, setting or behaviour is documented where its neighbours are (`docs/operations.md` for variables). The docs describe the new gateway in its own terms; no run numbers.
+- **Docs.** A new environment variable, setting or behaviour is documented where its neighbours are: variables and admin overrides in `docs/configuration.md`, routes and the boot order in `docs/operations.md`, log lines and metrics in `docs/observability.md`. The docs describe the new gateway in its own terms; no run numbers.
 - **Gates** before the change is called done: `go build ./...`, `go vet ./...`, `golangci-lint run`, `go test -race` on the touched packages and on `./gatewayprotocol/...`; a change to a `gatewayprotocol` rule also runs `go test -race ./cmd/devshardctl/`.
 
 ## Style checks

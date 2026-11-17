@@ -23,7 +23,7 @@ type Backend struct {
 	retrier rows.Retrier
 }
 
-// Open creates the storage directory if needed, opens <storageDir>/gateway.db and applies the migrations. See ../README.md, "Opening the database".
+// Open creates the storage directory if needed, opens <storageDir>/gateway.db and applies the migrations. See ../README.md, "SQLite".
 func Open(storageDir string) (store.Store, error) {
 	backend, err := openBackend(storageDir)
 	if err != nil {
