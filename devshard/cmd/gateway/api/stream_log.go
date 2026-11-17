@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"devshard/cmd/gateway/filters"
 )
@@ -176,8 +177,9 @@ func (r *logReader) release() {
 }
 
 type streamIndex struct {
-	mu   sync.Mutex
-	logs map[cacheKey][]*streamLog
+	mu      sync.Mutex
+	logs    map[cacheKey][]*streamLog
+	replays atomic.Int64
 }
 
 func newStreamIndex() *streamIndex { return &streamIndex{logs: make(map[cacheKey][]*streamLog)} }
@@ -205,8 +207,18 @@ func (index *streamIndex) adopt(key cacheKey) (*logReader, bool) {
 	index.mu.Unlock()
 	for _, log := range candidates {
 		if reader, adopted := log.adopt(); adopted {
+			index.replays.Add(1)
 			return reader, true
 		}
 	}
 	return nil, false
+}
+
+func (index *streamIndex) stats() (replays, live int64) {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	for _, held := range index.logs {
+		live += int64(len(held))
+	}
+	return index.replays.Load(), live
 }

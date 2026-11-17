@@ -379,3 +379,6 @@ func (s *Server) CaptureStats() (written, refused, failed, held int64) { return 
 
 // CacheStats reports the response cache's own account of itself, for the metrics collector.
 func (s *Server) CacheStats() (hits, misses, entries, bytes int64) { return s.cache.stats() }
+
+// StreamLogStats reports the live stream logs' own account of themselves, for the metrics collector.
+func (s *Server) StreamLogStats() (replays, live int64) { return s.streams.stats() }
