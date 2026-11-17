@@ -416,7 +416,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	if err != nil {
 		return nil, err
 	}
-	// Registered after the server, which owns both sinks. See ../README.md, "Wiring order, and the knots in it".
+	// Registered after the server, which owns both sinks. See README.md, "Wiring order, and the knots in it".
 	telemetry.Register(metrics.NewCaptureCollector(server))
 	telemetry.Register(metrics.NewCacheCollector(server))
 	observer.Subscribe(server.ObservePhase)
