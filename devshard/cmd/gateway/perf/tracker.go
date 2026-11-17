@@ -19,7 +19,8 @@ type Tracker struct {
 	hosts         map[hostKey]*hostState
 	liveEjections []liveEjection
 	capability    *capabilityTracker
-	inflight      *inflightGauge
+	inflight      *inflightGauge[string]
+	modelInflight *inflightGauge[hostKey]
 	now           func() time.Time
 	narrator      hostNarrator
 	lastSweep     time.Time
@@ -62,11 +63,12 @@ type hostNarrator interface {
 
 func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
 	return &Tracker{
-		config:     holder,
-		now:        now,
-		hosts:      make(map[hostKey]*hostState),
-		capability: newCapabilityTracker(),
-		inflight:   newInflightGauge(),
+		config:        holder,
+		now:           now,
+		hosts:         make(map[hostKey]*hostState),
+		capability:    newCapabilityTracker(),
+		inflight:      newInflightGauge[string](),
+		modelInflight: newInflightGauge[hostKey](),
 	}
 }
 
@@ -253,12 +255,14 @@ func (t *Tracker) RecordOutputOverrun(participant, model string) {
 	t.capability.recordOutputOverrun(participant, model)
 }
 
-func (t *Tracker) Acquire(participant string) {
+func (t *Tracker) Acquire(participant, model string) {
 	t.inflight.acquire(participant)
+	t.modelInflight.acquire(hostKey{participant: participant, model: model})
 }
 
-func (t *Tracker) Release(participant string) {
+func (t *Tracker) Release(participant, model string) {
 	t.inflight.release(participant)
+	t.modelInflight.release(hostKey{participant: participant, model: model})
 }
 
 // HostState is one tracked participant/model pair as a reader sees it.
@@ -268,6 +272,23 @@ type HostState struct {
 	Ejected            bool
 	Inflight           int
 	TimePerOutputToken time.Duration
+}
+
+// InflightPair is the requests in flight to one participant on one model.
+type InflightPair struct {
+	Participant string
+	Model       string
+	Requests    int
+}
+
+// InflightPairs returns every pair with a request in flight, order unspecified, whether or not the tracker holds a sample of it.
+func (t *Tracker) InflightPairs() []InflightPair {
+	counts := t.modelInflight.snapshot()
+	pairs := make([]InflightPair, 0, len(counts))
+	for key, requests := range counts {
+		pairs = append(pairs, InflightPair{Participant: key.participant, Model: key.model, Requests: requests})
+	}
+	return pairs
 }
 
 // Snapshot returns every tracked pair, order unspecified; the decode quantile and in-flight count are read after the host lock releases.
