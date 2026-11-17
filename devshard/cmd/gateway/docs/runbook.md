@@ -28,14 +28,14 @@ To reproduce an escrow lifecycle problem (create, drain, timeout votes, settle, 
 
 ## Release and rollback
 
-A release is an image. `make release` builds it for `linux/amd64` (`PLATFORM`) and pushes it as `$(GATEWAY_IMAGE):<tag>` for every tag in `GATEWAY_TAGS`. It refuses to run without `GATEWAY_VERSION`, which is stamped into every settlement ([`CONTRIBUTING.md`](../CONTRIBUTING.md), "Before you push"), and without `GATEWAY_TAGS`.
+A release is an image. `make release` builds it for `linux/amd64` (`PLATFORM`) and pushes it as `$(GATEWAY_IMAGE):<tag>` for every tag in `GATEWAY_TAGS`. It refuses to run without `GATEWAY_VERSION` (the gateway's release version), `DEVSHARD_PROTOCOL_VERSION` (the protocol version on chain, stamped into every settlement; [`CONTRIBUTING.md`](../CONTRIBUTING.md), "Before you push") and `GATEWAY_TAGS`. The image carries `org.opencontainers.image.revision` (the commit, with `-dirty` when the work tree differs from HEAD), `org.opencontainers.image.version` (the protocol version) and `org.opencontainers.image.source` labels.
 
 To release and deploy:
 
 1. Build and push the image from `devshard/cmd/gateway`:
 
    ```bash
-   make release GATEWAY_VERSION=<version> GATEWAY_TAGS='<tag> <tag>-latest'
+   make release GATEWAY_VERSION=<version> DEVSHARD_PROTOCOL_VERSION=<protocol-version> GATEWAY_TAGS='<tag> <tag>-latest'
    ```
 
 2. Point the stack at the new tag and recreate the container from the `deploy` directory. `GATEWAY_IMAGE` is a full image reference with its tag:
