@@ -393,7 +393,7 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 	markSettled := afterAll(len(groups), registration.release)
 	for _, group := range groups {
 		e.oweRefusals(outcome, params, poster, group.steps)
-		e.queueVotes(outcome, poster, group.steps, func() {
+		e.queueVotes(outcome, poster, registration, group.steps, func() {
 			e.decideHeldWinners(outcome.EscrowID, group.steps, registration)
 			markPosted()
 		}, markSettled)
@@ -410,11 +410,12 @@ func (e *Engine) poster(escrowID string, params any) TimeoutPoster {
 	return nil
 }
 
-func (e *Engine) queueVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, afterPost, markSettled func()) {
+func (e *Engine) queueVotes(outcome RaceOutcome, poster TimeoutPoster, registration *raceRegistration, steps []TimeoutStep, afterPost, markSettled func()) {
 	due := func() time.Time { return earliestDue(steps, poster) }
-	unripe := func() bool { return due().After(e.settles.now()) }
+	deadline := e.finishRechecked(steps, registration, due)
+	unripe := func() bool { return deadline().After(e.settles.now()) }
 	task := settleTask{
-		deadline: due,
+		deadline: deadline,
 		wake:     e.stopping,
 		post: func() {
 			// A vote not yet due at Stop is left owed in the store or to the next boot's sweep.

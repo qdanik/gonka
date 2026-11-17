@@ -45,7 +45,7 @@ func (c *raceCoordinator) apply(event AttemptEvent) {
 }
 
 func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
-	attempt.finishWith(event, c.target.NonceFinished(attempt.nonce))
+	attempt.finishWith(event, readNonceFinish(c.target, attempt.nonce))
 	c.retire(attempt)
 
 	if attempt.outcome == nil {
@@ -263,6 +263,7 @@ func (c *raceCoordinator) attemptRecord(attempt *liveAttempt) AttemptOutcome {
 	}
 	record.StartedAt = c.started
 	record.NonceFinished = attempt.nonceFinished
+	record.FinishApplied = attempt.finishApplied
 	record.PhaseTransitionAborted = c.phaseAborted(attempt, record)
 	record.Terminal = c.racedTerminal(attempt, record)
 	return record

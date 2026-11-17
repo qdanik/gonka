@@ -100,13 +100,13 @@ func (h sessionHandle) Finalize(ctx context.Context) error {
 	return h.Session.Finalize(ctx)
 }
 
-// SweepExecutionTimeouts steps over an escrow a Finalize holds instead of waiting it out, and votes only while the session is active.
+// SweepExecutionTimeouts steps over an escrow a Finalize holds instead of waiting it out, and votes only while the session is active and under its nonce cap.
 func (h sessionHandle) SweepExecutionTimeouts(ctx context.Context, grace time.Duration, budget int) user.SweepReport {
 	if !h.finalizing.TryLock() {
 		return user.SweepReport{}
 	}
 	defer h.finalizing.Unlock()
-	if h.machine.Phase() != types.PhaseActive {
+	if h.machine.Phase() != types.PhaseActive || h.NonceCapReached() {
 		return user.SweepReport{}
 	}
 	return h.Session.SweepExecutionTimeouts(ctx, grace, budget)

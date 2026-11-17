@@ -109,7 +109,7 @@ Findings are derived on every read and **never stored**: the counters are the fa
 
 - **A volume floor.** No *rate* finding is raised below **20** nonces in its denominator: a rate off four attempts describes noise, not a host. The one finding that counts rather than measures, `ledger_overcounted`, has no floor: a single overcounted nonce is already a defect in the books.
 - **Burns are excluded from every host rate.** A burn is this gateway's own decision; charging it to the host would report the gateway's throttling as the host's failure.
-- **The gateway's own failures are excluded.** A phase transition ending an attempt, a vote round that reached no verdict, a missing poster, a long response that had already produced content, and a client that stopped waiting are all the gateway's. A failure the ledger could not *name* still counts — excusing the unclassified would empty the rates.
+- **The gateway's own failures are excluded.** A phase transition ending an attempt, a vote round that reached no verdict, a missing poster, a long response that had already produced content (a reason only rows written before the gateway voted on long responses carry), and a client that stopped waiting are all the gateway's. A failure the ledger could not *name* still counts — excusing the unclassified would empty the rates.
 - **The warmup probe is excluded whatever it ended as.** It is the gateway's own request, so it leaves both sides of every ratio; excluding it only when it succeeded would report a host's refusals while hiding its successes.
 
 Thresholds are constants rather than configuration: two gateways must not report the same host differently, and a host comparing two reports should be able to tell that the host moved, not the ruler.

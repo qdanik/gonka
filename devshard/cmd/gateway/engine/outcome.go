@@ -82,6 +82,7 @@ type AttemptOutcome struct {
 	Confirmed       bool
 	ConfirmedAt     int64
 	NonceFinished   bool
+	FinishApplied   bool
 
 	ReceiptDeadlineMissed    bool
 	FirstTokenDeadlineMissed bool
