@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/accounting"
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/warmup"
@@ -19,6 +20,8 @@ import (
 // Escrows resolves the escrow a probe's nonce was committed on, draining ones included.
 type Escrows interface {
 	AcquireCommitted(escrowID string) (registry.EscrowSession, func(), bool)
+	// HoldForVote keeps the escrow's session open and busy for a vote without counting as a request.
+	HoldForVote(escrowID string) (registry.EscrowSession, func(), bool)
 }
 
 // Outcomes is satisfied by the adapter that writes a probe's result to the metric and the journal.
@@ -99,18 +102,49 @@ func (r *Runner) run(probe sentProbe) {
 	defer cancelSend()
 
 	answer := newCapture(r.now)
+	meter := engine.NewStreamMeter(r.now, probe.request.Assignment.Host, probe.request.Assignment.Nonce)
 	var acknowledged atomic.Bool
-	response, err := r.send(sendCtx, probe.session, probe.prepared, answer, func() { acknowledged.Store(true) })
+	probe.prepared.OnSend(func() {
+		meter.Sent()
+		answer.Sent()
+	})
+	response, err := r.send(sendCtx, probe.session, probe.prepared, io.MultiWriter(answer, meter), func() {
+		acknowledged.Store(true)
+		meter.Receipt()
+	})
 	total := r.now().Sub(answer.started)
 	answered := acknowledged.Load() || (response != nil && len(response.Receipt) > 0)
-
-	result := r.result(probe, answer, total, err)
-	r.record(result, answered)
-	if err != nil {
-		r.binding.Voter.Settle(lifetime, probe.request.Assignment.Escrow, probe.request.Model, probe.params, probe.prepared.Nonce(), answered)
+	var confirmedAt int64
+	if response != nil {
+		confirmedAt = response.ConfirmedAt
 	}
+	read := meter.Outcome(confirmedAt, err)
+
+	result := r.result(probe, answer, read, total, err)
+	r.record(result, answered, read)
 	probe.session.ArmQuietSettle()
+	if err == nil {
+		probe.release()
+		r.report(result)
+		return
+	}
+	releaseVote := r.holdForVote(probe)
+	defer releaseVote()
+	r.report(result)
+	r.binding.Voter.Settle(lifetime, probe.request.Assignment.Escrow, probe.request.Model, probe.params, probe.prepared.Nonce(), answered)
+	probe.session.ArmQuietSettle()
+}
+
+func (r *Runner) holdForVote(probe sentProbe) func() {
+	_, release, held := r.binding.Escrows.HoldForVote(probe.request.Assignment.Escrow)
+	if !held {
+		return probe.release
+	}
 	probe.release()
+	return release
+}
+
+func (r *Runner) report(result Result) {
 	if r.binding.Outcomes != nil {
 		r.binding.Outcomes.ShadowProbed(result)
 	}
@@ -125,7 +159,7 @@ func dispatch(ctx context.Context, session registry.EscrowSession, prepared *use
 	return response, err
 }
 
-func (r *Runner) result(probe sentProbe, answer *capture, total time.Duration, err error) Result {
+func (r *Runner) result(probe sentProbe, answer *capture, read engine.AttemptOutcome, total time.Duration, err error) Result {
 	result := Result{
 		Escrow:      probe.request.Assignment.Escrow,
 		Participant: probe.request.Assignment.Host,
@@ -137,24 +171,28 @@ func (r *Runner) result(probe sentProbe, answer *capture, total time.Duration, e
 	}
 	result.FirstToken, result.Streamed = answer.firstToken()
 	result.OutputTokens = answer.completionTokens()
+	if result.OutputTokens == 0 {
+		result.OutputTokens = uint64(read.OutputTokens())
+	}
 	if err != nil {
 		result.Outcome = OutcomeFailed
 	}
 	return result
 }
 
-func (r *Runner) record(result Result, answered bool) {
+func (r *Runner) record(result Result, answered bool, read engine.AttemptOutcome) {
 	if r.binding.Probes == nil {
 		return
 	}
-	r.binding.Probes.ProbeRecorded(result.Escrow, accounting.Attempt{
+	line := accounting.Attempt{
 		Nonce:             result.Nonce,
 		OutputTokens:      int64(result.OutputTokens),
-		FirstContentDelay: result.FirstToken,
+		FirstContentDelay: read.FirstContentDelay(),
 		Sent:              true,
 		Acknowledged:      answered,
 		Usage:             accounting.UsageLoser,
 		Phase:             accounting.PhaseNormal,
 		Terminal:          accounting.TerminalShadowProbe,
-	})
+	}
+	r.binding.Probes.ProbeRecorded(result.Escrow, line.WithTiming(read))
 }
