@@ -10,7 +10,7 @@ The transaction around the message (the `Any` wrapper, body, auth info, sign doc
 
 ## The goldens
 
-`testdata/` holds five base64 goldens: three whole messages (`settle_msg_full`, `settle_msg_empty_optional`, and `settle_msg_zero_scalars`, whose slot 0 and counters are zero) checked through `Marshal`, and one host-stats entry and one slot-signature entry checked through the package's mappings, all from the fixed inputs `marshal_test.go` repeats. `settle_msg_zero_scalars` was written once from `Marshal`. No generator writes them, so a golden here changes only by hand and with a reason.
+`testdata/` holds five base64 goldens: three whole messages (`settle_msg_full`, `settle_msg_empty_optional`, and `settle_msg_zero_scalars`, whose slot 0 and counters are zero) checked through `Marshal`, and one host-stats entry and one slot-signature entry checked through the package's mappings, all from the fixed inputs `marshal_test.go` repeats. `settle_msg_zero_scalars` is `Marshal`'s own output for that message, not an independent encoding. No generator writes them, so a golden here changes only by hand and with a reason.
 
 ## Imports
 
