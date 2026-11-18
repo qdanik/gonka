@@ -13,7 +13,7 @@ An escrow is **routable** when it is not standby and not at its nonce cap. An un
 ## The algorithm
 
 ```text
-fullCount    = #{escrows not nonce-capped with Full}
+fullCount    = #{routable escrows with Full}
 guardShort   = priced && !misconfigured ? max(0, K − fullCount) : 0
 L            = Σ_routable atModelPrice(max(0, free − FullCost_e) + returning)
 need         = 1.5 × D_peak + (misconfigured ? 0 : K × Slot)
@@ -29,9 +29,11 @@ budget       = regulars + standbys > room          (Decision.BudgetReached)
 deficit      = max(guard, cap, spread) − room
 ```
 
-`allowed` is requests not blocked, an epoch known, the model served by the network, the regular create breaker not cooling down, and the tick outside the bridge window: inside it `prepareBridge` owns every create and retire, since a regular created there is retired by its next pass. A regular create's reason is `guard` while its index is under `guardShort`, then `capacity` while under `capShort`, then `spread`; every reason therefore matches the state it was decided in (the scenarios' `create reason` invariant). Every sum and product saturates instead of wrapping, and `capShort` is bounded by `MaxUnsettled + 1`.
+`fullCount` counts routable escrows only, so a full standby never stands in for a regular one: routing opens a standby only when no regular can pay and none was passed over for its hosts, so it is the reserve beside the guarantee, funded by `standbyShort`, not part of it. A fresh create reaches `fullCount` through its row: a commitment is in `PendingRegularCreates` and `counted` until it lands, and the unread row it becomes is routable and full at its stored amount, so the pending commitment stands in for the guard create until it lands and the landed row then meets the guard: the guard creates stop at `K` full regulars.
 
-A model is **misconfigured** when `Amount − CreateFee < Slot`: a fresh escrow could never be full, so the guarantee is off. Full means a balance of one slot here as in `liquidity.Classify` and routing, with no margin on top. `Decision.AmountNeeded` is that floor, `CreateFee + Slot`. Its `need` drops the `K × Slot` term too, so capacity creates follow demand alone and never fund escrows that could not be full. An **unpriced** model (no chain price yet, or an overflow) has no guard, no capacity and no planned retire but the nonce cap.
+`allowed` is requests not blocked by admission's own rule (`config.Modes.BlocksRequests`: relaxed `poc_mode` lets requests through a PoC, so a confirmation PoC is no gate there), no epoch PoC running (a regular created in one carries the latest epoch, N+1, while the chain stamps N, and the bridge window can open soon after and retire it), an epoch known, the model served by the network, the regular create breaker not cooling down, and the tick outside the bridge window: inside it `prepareBridge` owns every create and retire, since a regular created there is retired by its next pass. A regular create's reason is `guard` while its index is under `guardShort`, then `capacity` while under `capShort`, then `spread`; every reason therefore matches the state it was decided in (the scenarios' `create reason` invariant). Every sum and product saturates instead of wrapping, and `capShort` is bounded by `MaxUnsettled + 1`.
+
+A model is **misconfigured** when `Amount − CreateFee < Slot`: a fresh escrow could never be full, so the guarantee is off. Full means a balance of one slot here as in `liquidity.Classify` and routing, with no margin on top: an escrow holding a slot pays a request up to the retirement reserve the slot is priced from, and routing refuses on it a request that costs more than the slot. `Decision.AmountNeeded` is that floor, `CreateFee + Slot`. Its `need` drops the `K × Slot` term too, so capacity creates follow demand alone and never fund escrows that could not be full. An **unpriced** model (no chain price yet, or an overflow) has no guard, no capacity and no planned retire but the nonce cap.
 
 `Decision.Need` and `Decision.Liquid` carry `need` and `L`, so the manager can narrate what a capacity create was sized from.
 
@@ -51,13 +53,13 @@ The nonce cap retires every capped escrow at once. Inside the bridge window that
 | --- | --- |
 | budget pressure | `deficit > Parking`, or the wallet refused the last create while a regular create is still wanted and nothing is parking: the least-free starved routable escrow, busy or not |
 | idle starved | a starved routable escrow idle for ten minutes (`idleRetireAfter`): nothing open at a tick and no race took it since the tick before (`escrow/planner_state.go`, `idleFor`, reading the registry's `Holds`). A race that starts and settles between two ticks would otherwise never be seen, and a steadily used escrow would be retired as idle |
-| surplus | the demand window is full, no regular create is wanted (`max(guard, cap, spread) = 0`), `#routable > max(TargetCount, K + ceil(max(0, need − Σ_routable full atModelPrice(free)) / (Amount − FullCost)))`, and it has held on three scheduled ticks in a row (`surplusSamples`, counted as the streak plus one on a scheduled tick and the streak alone on a wakeup): the least-free starved escrow while `fullCount > K`, else the least-free full one while `fullCount ≥ K + 2` |
+| surplus | the demand window is full, no regular create is wanted (`max(guard, cap, spread) = 0`), `#{routable non-temp of the current label} > max(TargetCount, K + ceil(max(0, need − Σ_routable full atModelPrice(free)) / (Amount − FullCost)))`, and it has held on three scheduled ticks in a row (`surplusSamples`, counted as the streak plus one on a scheduled tick and the streak alone on a wakeup): the least-free starved escrow of that set while `fullCount > K`, else the least-free full one of it while `fullCount ≥ K + 2` |
 
 No planned retire chooses an unread escrow: it has served nothing yet, and the next read gives its real money. Least-free means lowest free money, then lowest id, so the same input always gives the same decision. A planned retire therefore never takes `fullCount` below `K`.
 
 Budget pressure reads the regular want only, so a missing standby never parks a serving escrow; the budget flag still counts standbys, since their creates are cut too. Each parking row frees one unit of budget once it settles, so pressure parks one more escrow only while the deficit exceeds the rows already parking; otherwise a deficit of one would drain every starved escrow while settlements wait. A short wallet presses the same way, one escrow at a time, so the residue of a starved escrow returns to the wallet through its settlement.
 
-Surplus never fires in a decision that wants a regular create of any reason, so it never parks an escrow while creating its replacement (a spread create beside the retire of the only current-label escrow), and it sums only routable full escrows, the set `L` is drawn from, so a standby's money never makes a short model look surplus. A wakeup tick never advances the streak: only scheduled ticks are samples.
+Surplus never fires in a decision that wants a regular create of any reason, so it never parks an escrow while creating its replacement (a spread create beside the retire of the only current-label escrow), and it sums only routable full escrows, the set `L` is drawn from, so a standby's money never makes a short model look surplus. Surplus counts and retires from the same set `spreadShort` counts, so a surplus retire never leaves a spread shortfall for the next tick to create; a temp or an older-label escrow is never its victim. A wakeup tick never advances the streak: only scheduled ticks are samples.
 
 ## Rate
 

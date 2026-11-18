@@ -189,6 +189,14 @@ func TestPlanSizesCreatesAndRetiresFromMoneyDemandAndBudget(t *testing.T) {
 			}),
 			wantBroken: true,
 		},
+		{
+			name: "an epoch PoC creates nothing and breaks the guarantee",
+			state: modelWith(func(state *ModelState) {
+				state.Escrows[1] = starvedEscrow("2", 40_000)
+				state.InEpochPoC = true
+			}),
+			wantBroken: true,
+		},
 		{name: "no epoch creates nothing", state: modelWith(func(state *ModelState) { state.MoneyShort, state.EpochKnown = true, false })},
 		{name: "a gated breaker creates nothing", state: modelWith(func(state *ModelState) { state.MoneyShort, state.BreakerGated = true, true })},
 		{name: "a model the network does not serve creates nothing", state: modelWith(func(state *ModelState) { state.MoneyShort, state.ServedByNetwork = true, false })},
@@ -344,6 +352,25 @@ func TestPlanSizesCreatesAndRetiresFromMoneyDemandAndBudget(t *testing.T) {
 				state.DemandWindowFull, state.SurplusStreak = true, 2
 			}),
 			wantCreates: creates(ReasonSpread),
+		},
+		{
+			name: "surplus leaves a temp and an older-label escrow beside a model at its target",
+			state: modelWith(func(state *ModelState) {
+				temp, older := fullEscrow("T", 100_000), fullEscrow("O", 100_000)
+				temp.Temp, older.Label = true, 6
+				state.Escrows = append(state.Escrows, temp, older)
+				state.Counted, state.DemandWindowFull, state.SurplusStreak = 4, true, 2
+			}),
+		},
+		{
+			name: "surplus retires the least-free current-label escrow while a temp has less free money",
+			state: modelWith(func(state *ModelState) {
+				temp := fullEscrow("T", 100_000)
+				temp.Temp = true
+				state.Escrows = append(state.Escrows, fullEscrow("3", 900_000), fullEscrow("4", 800_000), temp)
+				state.Counted, state.DemandWindowFull, state.SurplusStreak = 5, true, 2
+			}),
+			wantRetires: []Retire{{EscrowID: "4", Reason: ReasonSurplus}},
 		},
 		{
 			name: "surplus waits for a full demand window",

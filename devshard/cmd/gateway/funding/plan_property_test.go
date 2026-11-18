@@ -42,7 +42,7 @@ func randomModelState(random *rand.Rand) ModelState {
 		Amount: random.Uint64N(2_000_000), CreateFee: 100, FullCost: propertyFullCost, Slot: 2 * propertyFullCost,
 		Priced: random.IntN(10) != 0, DemandPeak: random.Uint64N(4_000_000), DemandWindowFull: random.IntN(2) == 0,
 		SurplusStreak: random.IntN(4), ScheduledTick: random.IntN(2) == 0, Parking: random.IntN(3), MoneyShort: random.IntN(3) == 0, WalletShort: random.IntN(4) == 0,
-		RequestsBlocked: random.IntN(6) == 0, EpochKnown: random.IntN(8) != 0, ServedByNetwork: random.IntN(8) != 0,
+		RequestsBlocked: random.IntN(6) == 0, InEpochPoC: random.IntN(6) == 0, EpochKnown: random.IntN(8) != 0, ServedByNetwork: random.IntN(8) != 0,
 		BreakerGated: random.IntN(6) == 0, InBridgeWindow: random.IntN(6) == 0, NearBridgeWindow: random.IntN(4) == 0,
 		CurrentLabel: 7, BucketTokens: random.IntN(3),
 	}
@@ -113,18 +113,17 @@ func computeExpectedPlan(model ModelState) expectedPlan {
 	if !expected.misconfigured {
 		expected.need += uint64(model.FullContextSlots) * model.Slot
 	}
-	routableCount, currentStandbys := 0, 0
+	currentStandbys := 0
 	for _, escrow := range model.Escrows {
-		if escrow.Money.Full && !escrow.NonceCapReached {
-			expected.fullEscrows++
-		}
 		if escrow.Standby && !escrow.NonceCapReached && escrow.Label >= model.CurrentLabel {
 			currentStandbys++
 		}
 		if !isRoutable(escrow) {
 			continue
 		}
-		routableCount++
+		if escrow.Money.Full {
+			expected.fullEscrows++
+		}
 		expected.liquid += escrow.Money.Returning
 		if escrow.Money.Free > escrow.FullCost {
 			expected.liquid += escrow.Money.Free - escrow.FullCost
@@ -160,7 +159,7 @@ func computeExpectedPlan(model ModelState) expectedPlan {
 			uncovered = expected.need - expected.routableFullFree
 		}
 		wanted := model.FullContextSlots + int((uncovered+perEscrow-1)/perEscrow)
-		expected.surplusHeld = routableCount > max(model.TargetCount, wanted)
+		expected.surplusHeld = expected.currentRegulars > max(model.TargetCount, wanted)
 	}
 	return expected
 }
@@ -182,7 +181,7 @@ func checkPlanProperties(t *testing.T, random *rand.Rand, model ModelState, wher
 	t.Helper()
 	decision := Plan(model)
 	expected := computeExpectedPlan(model)
-	allowed := !model.RequestsBlocked && model.EpochKnown && !model.BreakerGated && model.ServedByNetwork && !model.InBridgeWindow
+	allowed := !model.RequestsBlocked && !model.InEpochPoC && model.EpochKnown && !model.BreakerGated && model.ServedByNetwork && !model.InBridgeWindow
 
 	require.Equal(t, expected.room, decision.Room, "%s: room", where)
 	require.Equal(t, expected.fullEscrows, decision.FullCount, "%s: full count", where)
@@ -229,6 +228,8 @@ func checkPlanProperties(t *testing.T, random *rand.Rand, model ModelState, wher
 				held++
 			}
 			require.GreaterOrEqual(t, held, surplusSamples, "%s: a surplus retire before three scheduled samples", where)
+			require.False(t, retired.Temp || retired.Label != model.CurrentLabel, "%s: a surplus retire of an escrow the spread count leaves out", where)
+			require.GreaterOrEqual(t, expected.currentRegulars-1, model.TargetCount, "%s: a surplus retire that a spread create would undo", where)
 			if retired.Money.Starved {
 				require.Greater(t, expected.fullEscrows, model.FullContextSlots, "%s: a starved surplus retire without a spare full escrow", where)
 			}
