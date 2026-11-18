@@ -224,12 +224,13 @@ func (e *escrowLedger) participantOf(slotID uint32) string {
 
 // slotAggregate is one slot's share of an escrow, folded in one pass so the record below is a copy.
 type slotAggregate struct {
-	counted      uint64
-	pending      uint64
-	inFlight     uint64
-	dispositions map[Disposition]uint64
-	openRequests map[string]struct{}
-	tally        timeoutTally
+	counted        uint64
+	pending        uint64
+	inFlight       uint64
+	inFlightParked uint64
+	dispositions   map[Disposition]uint64
+	openRequests   map[string]struct{}
+	tally          timeoutTally
 }
 
 func (e *escrowLedger) slots(escrowID string) []SlotRecord {
@@ -254,6 +255,9 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		case record.isCounted:
 		case record.sent && !record.finished:
 			aggregate.inFlight++
+			if e.retired {
+				aggregate.inFlightParked++
+			}
 			if record.requestID != "" && record.terminal == "" {
 				if aggregate.openRequests == nil {
 					aggregate.openRequests = make(map[string]struct{})
@@ -298,6 +302,7 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 			},
 			hostActivity: hostActivity{
 				InFlight:             aggregate.inFlight,
+				InFlightParked:       aggregate.inFlightParked,
 				openRequests:         aggregate.openRequests,
 				InFlightRequests:     uint64(len(aggregate.openRequests)),
 				UnresolvedChallenges: e.challenged[slotID],

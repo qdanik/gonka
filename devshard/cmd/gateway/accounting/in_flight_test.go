@@ -129,3 +129,42 @@ func TestANonceLeavesFlightOnlyWhenTheChainAppliesItsFinish(t *testing.T) {
 		t.Fatalf("after sealing in_flight = %d, finished_used = %d, want 0 and 1", sealed.InFlight, sealed.Dispositions[DispositionFinishedUsed])
 	}
 }
+
+// Test flow:
+//  1. Open a live escrow and a second one that is then retired, both observed at latest nonce 8.
+//  2. Assign slot-0 nonce 4 in each escrow and slot-0 nonce 8 in the retired one, and mark nonce 8 finished.
+//  3. Assert the retired escrow's slot-0 record reports 1 in flight and 1 parked.
+//  4. Assert the live escrow's slot-0 record reports 1 in flight and 0 parked.
+//  5. Assert the epoch summary reports 2 in flight and 1 parked, since the finished nonce counts in neither.
+func TestParkedInFlightIsTheRetiredEscrowsShareOfInFlight(t *testing.T) {
+	book := newTestBook(t, 4)
+	openTestEscrow(t, book, otherEscrow, testEpoch, 4)
+	for _, escrowID := range []string{testEscrow, otherEscrow} {
+		if err := book.ObserveLatestNonce(escrowID, 8); err != nil {
+			t.Fatalf("ObserveLatestNonce(%s): %v", escrowID, err)
+		}
+	}
+	book.RetireEscrow(otherEscrow)
+
+	for escrowID, nonces := range map[string][]uint64{testEscrow: {4}, otherEscrow: {4, 8}} {
+		for _, nonce := range nonces {
+			if err := book.RecordAssigned(escrowID, nonce, "req-"+escrowID); err != nil {
+				t.Fatalf("RecordAssigned(%s, %d): %v", escrowID, nonce, err)
+			}
+		}
+	}
+	markFinished(t, book, otherEscrow, 8)
+
+	retired := book.Query(QueryFilter{Participant: participantFor(0), EscrowIDs: []string{otherEscrow}})[0]
+	if retired.InFlight != 1 || retired.InFlightParked != 1 {
+		t.Fatalf("retired escrow in_flight, in_flight_parked = %d, %d, want 1, 1", retired.InFlight, retired.InFlightParked)
+	}
+	live := book.Query(QueryFilter{Participant: participantFor(0), EscrowIDs: []string{testEscrow}})[0]
+	if live.InFlight != 1 || live.InFlightParked != 0 {
+		t.Fatalf("live escrow in_flight, in_flight_parked = %d, %d, want 1, 0", live.InFlight, live.InFlightParked)
+	}
+	summaries := book.Epochs(QueryFilter{})
+	if len(summaries) != 1 || summaries[0].InFlight != 2 || summaries[0].InFlightParked != 1 {
+		t.Fatalf("epoch summaries = %+v, want one with in_flight 2 and in_flight_parked 1", summaries)
+	}
+}

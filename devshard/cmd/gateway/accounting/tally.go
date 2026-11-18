@@ -86,6 +86,7 @@ type hostActivity struct {
 	RequiredValidations  uint32 `json:"required_validations"`
 	CompletedValidations uint32 `json:"completed_validations"`
 	InFlight             uint64 `json:"in_flight"`
+	InFlightParked       uint64 `json:"in_flight_parked"`
 	InFlightRequests     uint64 `json:"in_flight_requests"`
 	openRequests         map[string]struct{}
 	UnresolvedChallenges uint64 `json:"unresolved_challenges"`
@@ -98,6 +99,7 @@ func (a *hostActivity) add(other hostActivity) {
 	a.RequiredValidations += other.RequiredValidations
 	a.CompletedValidations += other.CompletedValidations
 	a.InFlight += other.InFlight
+	a.InFlightParked += other.InFlightParked
 	a.UnresolvedChallenges += other.UnresolvedChallenges
 	a.ValidationsPerformed += other.ValidationsPerformed
 	a.TimeoutsApplied += other.TimeoutsApplied
