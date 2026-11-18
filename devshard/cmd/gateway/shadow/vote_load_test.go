@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"common/chainoracle/blocks"
 	"github.com/stretchr/testify/require"
 
-	"common/chainoracle/blocks"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/warmup"
 	"devshard/host"
