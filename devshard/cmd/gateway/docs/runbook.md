@@ -72,15 +72,33 @@ To restore, stop the container, replace the contents of the storage directory wi
 - **`DEVSHARDS_JSON` writes rows back.** An escrow settled after the archive was taken has its row restored as active, and the seed writes back every seeded escrow whose row settlement deleted. Neither is served: publication asks the chain, refuses an escrow it reports settled (`bridge.ErrEscrowSettled`) and deletes its row again, so a restore cannot resurrect a settled escrow.
 - **What happened after the archive is not in it.** An escrow created after the archive was taken has no row in it, so the restored gateway does not know it; an escrow that served after the archive comes back with its archived session, older than the copy its hosts hold. Take the archive right before the change it protects against, and settle or let drain what you do not need restored.
 
-## The two routing lists
+## The participants setting
 
-`participant_allowlist` narrows **which participants this gateway routes to**. `unthrottled_participants` names participants whose congestion window and ejection it declines to apply, and admits them whether or not the allowlist names them. Both are set through `/v1/admin/settings`, by `PUT` or `POST`, and nowhere else: there is no env value and no default behind them.
+`participants` is one admin setting holding three lists of participant addresses. It is set through `/v1/admin/settings`, by `PUT` or `POST`, and nowhere else: there is no env value and no default behind it.
 
-**That makes them one `PUT` away from being cleared.** A `PUT` replaces the stored overrides document whole, so a `PUT` that does not resend a list drops it, and a dropped narrowing fails open: the gateway routes to everybody again without refusing anything. The same is true of a fresh or lost store. A `POST` leaves a list it does not name in place. Read the lists back either way: the `settings written` audit line carries `participant_allowlist` and `unthrottled_participants` as they stand after the call.
+```json
+{"participants": {"trust": ["gonka1..."], "shadow": ["gonka1..."], "unthrottled": ["gonka1..."]}}
+```
 
-An entry must look like an address. The shape is checked when the settings document is built, so a short host label pasted from a log or a Grafana `host=` tag is refused at the settings call rather than narrowing dispatch to nobody.
+```bash
+curl -X POST "$GATEWAY/v1/admin/settings" -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" -d '{"participants": {"shadow": ["gonka1..."]}}'
+```
 
-Neither list restrains anything but routing. Host pings, catch-up, finalize, the retirement flush, the timeout sweep and the warmup prober all address the group the chain gave the escrow. See [routing.md](./routing.md), "Paths that ignore the routing lists, by design".
+- **`trust`** narrows **which participants this gateway routes client traffic to**. When it is non-empty only its members, and the `unthrottled` ones, are routed to; when it is empty everybody is, except the `shadow` members.
+- **`unthrottled`** names participants whose congestion window and ejection the gateway declines to apply, and admits them whether or not `trust` names them. See [routing.md](./routing.md), "Unthrottled participants".
+- **`shadow`** names participants that receive inference probes and never client traffic. A probe repeats a client request the gateway has queued, with `max_tokens` and `min_tokens` both set to one value drawn per probe from 256 to the least of 1024, the model's output cap and the context room the prompt leaves, so the shadow host receives that client's prompt; it is sent to the host in place of the ghost burn its nonce would otherwise be, so the probe rate follows the shadow host's share of an escrow's slots, and a probe is the operator's cost: billed like the burn it replaces plus the tokens it reserves, never charged to the client it repeats. A grammar-constrained request, or one that carries tools, is repeated with no `min_tokens`; a request with under 256 tokens of room is burned as `shadow_probe_no_room`; with no live request queued it is burned as `shadow_probe_no_request`. Nothing throttles or limits a shadow host: its congestion window, cut-off and ejection do not apply to a probe. A shadow host absent from the escrow's session, owing proof-of-compute or with diverged escrow state is burned as before, because a probe cannot be served there. See [routing.md](./routing.md), "Shadow participants".
+
+**An empty `trust` with a non-empty `shadow` routes clients to everybody except the shadow members.** That is also how an operator keeps one participant out of routing without naming everybody else.
+
+A `POST` merges inside `participants`, one sub-key at a time: a sub-key it names replaces the stored one, a sub-key it sets to `null` is cleared, and an omitted sub-key stays. `{"participants": null}` clears all three. A `PUT` replaces the stored overrides document whole, so a `PUT` that does not resend `participants` drops it.
+
+**That makes the lists one `PUT` away from being cleared.** A dropped `trust` fails open: the gateway routes to everybody again without refusing anything, and a dropped `shadow` makes the shadow hosts routable. The same is true of a fresh or lost store. Read the lists back either way: the `settings written` audit line carries `participants_trust`, `participants_shadow` and `participants_unthrottled` as they stand after the call.
+
+An entry must look like an address. The shape is checked when the settings document is built, so a short host label pasted from a log or a Grafana `host=` tag is refused at the settings call rather than narrowing dispatch to nobody. A participant named in both `shadow` and `trust`, or in both `shadow` and `unthrottled`, is refused with an error naming it; `trust` and `unthrottled` may name the same participant.
+
+The lists restrain nothing but routing. Host pings, catch-up, finalize, the retirement flush, the timeout sweep and the warmup prober all address the group the chain gave the escrow. See [routing.md](./routing.md), "Paths that ignore the routing lists, by design".
+
+**Deciding whether to promote a shadow host.** Each probe ends in one `shadow probe served` or `shadow probe failed` line and in `devshard_gateway_shadow_probes_total{participant,outcome}`. A served probe also records `devshard_gateway_shadow_probe_first_token_seconds{participant}` (only when a byte streamed), `devshard_gateway_shadow_probe_duration_seconds{participant}` and `devshard_gateway_shadow_probe_output_tokens_total{participant}`. Compare them with the same participant's `devshard_gateway_participant_*` families before moving the participant from `shadow` to `trust`. A failed probe is voted as a timeout like any nonce no reply finished. The nonce is recorded in the ledger under the terminal `shadow_probe`, so it lands on neither side of a serving ratio ([accounting.md](./accounting.md), "Four rules that keep a finding honest").
 
 ## Settling an escrow that is still busy
 
