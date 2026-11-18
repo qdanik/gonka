@@ -118,7 +118,8 @@ func (bm *BlsManager) ProcessKeyGenerationInitiated(event *chainevents.JSONRPCRe
 		"epochID", epochID, "participantCount", len(participants))
 
 	// Generate dealer part
-	dealerPart, err := bm.generateDealerPart(epochID, uint32(totalSlots), uint32(tDegree), participants)
+	chainID := bm.cosmosClient.GetClientContext().ChainID
+	dealerPart, err := bm.generateDealerPart(epochID, chainID, uint32(totalSlots), uint32(tDegree), participants)
 	if err != nil {
 		return fmt.Errorf("failed to generate dealer part: %w", err)
 	}
@@ -190,7 +191,7 @@ func (bm *BlsManager) parseParticipantsFromEvent(event *chainevents.JSONRPCRespo
 }
 
 // generateDealerPart generates the dealer's contribution to the DKG
-func (bm *BlsManager) generateDealerPart(epochID uint64, totalSlots, tDegree uint32, participants []ParticipantInfo) (*types.MsgSubmitDealerPart, error) {
+func (bm *BlsManager) generateDealerPart(epochID uint64, chainID string, totalSlots, tDegree uint32, participants []ParticipantInfo) (*types.MsgSubmitDealerPart, error) {
 	logging.Debug("Generating dealer part", inferenceTypes.BLS,
 		"epochID", epochID, "totalSlots", totalSlots, "tDegree", tDegree, "participantCount", len(participants))
 
@@ -221,6 +222,16 @@ func (bm *BlsManager) generateDealerPart(epochID uint64, totalSlots, tDegree uin
 
 	// Compute public commitments to coefficients (C_kj = g * a_kj, G2 points)
 	commitments := computeG2CommitmentsBlst(polynomial)
+
+	// The chain accepts the part only with a signature made by the constant term over this dealer, epoch and chain.
+	dealerAddress := bm.cosmosClient.GetAddress()
+	proofHash := types.BuildDealerProofOfPossessionHash(chainID, epochID, dealerAddress)
+	proofOfPossession, err := bm.computePartialSignatureBlst(proofHash, &VerificationResult{
+		AggregatedShares: []fr.Element{*polynomial[0]},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign proof of possession for epoch %d: %w", epochID, err)
+	}
 
 	// Create encrypted shares for participants using deterministic array indexing.
 	encryptedSharesForParticipants := make([]types.EncryptedSharesForParticipant, len(participants))
@@ -286,10 +297,11 @@ func (bm *BlsManager) generateDealerPart(epochID uint64, totalSlots, tDegree uin
 	}
 
 	dealerPart := &types.MsgSubmitDealerPart{
-		Creator:                        bm.cosmosClient.GetAddress(),
+		Creator:                        dealerAddress,
 		EpochId:                        epochID,
 		Commitments:                    commitments,
 		EncryptedSharesForParticipants: encryptedSharesForParticipants,
+		ProofOfPossession:              proofOfPossession,
 	}
 
 	logging.Info("Generated dealer part with actual cryptography", inferenceTypes.BLS,

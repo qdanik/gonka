@@ -166,6 +166,10 @@ func (k Keeper) verifyDealerComplaintResponse(epochBLSData *types.EpochBLSData, 
 
 	share := &fr.Element{}
 	share.SetBytes(complaint.ResponseShareBytes)
+	// A zero share has the identity as its public key and cannot sign, so opening one does not clear the dealer.
+	if share.IsZero() {
+		return false, nil
+	}
 	validShare, err := k.verifyShareAgainstCommitmentsBlst(share, slotIndex, dealerPart.Commitments)
 	if err != nil {
 		return false, nil

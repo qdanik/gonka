@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
+	keepertest "github.com/productscience/inference/testutil/keeper"
+	"github.com/productscience/inference/x/bls/keeper"
+	"github.com/productscience/inference/x/bls/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -299,7 +302,7 @@ func TestGenerateDealerPart_ValidatesSnapshotKeysUpfront(t *testing.T) {
 			},
 		}
 
-		dealerPart, err := bm.generateDealerPart(7, 2, 1, participants)
+		dealerPart, err := bm.generateDealerPart(7, "gonka-test", 2, 1, participants)
 		require.NoError(t, err)
 		require.NotNil(t, dealerPart)
 		require.Len(t, dealerPart.Commitments, 2)
@@ -329,7 +332,7 @@ func TestGenerateDealerPart_ValidatesSnapshotKeysUpfront(t *testing.T) {
 			},
 		}
 
-		dealerPart, err := bm.generateDealerPart(8, 2, 1, participants)
+		dealerPart, err := bm.generateDealerPart(8, "gonka-test", 2, 1, participants)
 		require.Nil(t, dealerPart)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "epoch 8")
@@ -354,7 +357,7 @@ func TestGenerateDealerPart_ValidatesSnapshotKeysUpfront(t *testing.T) {
 			},
 		}
 
-		dealerPart, err := bm.generateDealerPart(9, 2, 1, participants)
+		dealerPart, err := bm.generateDealerPart(9, "gonka-test", 2, 1, participants)
 		require.Nil(t, dealerPart)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "epoch 9")
@@ -368,3 +371,57 @@ func TestGenerateDealerPart_ValidatesSnapshotKeysUpfront(t *testing.T) {
 	})
 }
 
+// Test flow:
+// 1. Generate a dealer part on the host for a two-participant round on a named chain.
+// 2. Submit it to the chain message server running under another chain id; expect the proof of possession to be refused.
+// 3. Submit it under the chain id the host signed for; expect the part to be stored.
+func TestGenerateDealerPart_ProofOfPossessionAcceptedByChain(t *testing.T) {
+	primaryKey, err := hex.DecodeString("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+	require.NoError(t, err)
+	otherKey, err := hex.DecodeString("031884e5018572688f308999f53092837489aeac31afe1389809281562794c171b")
+	require.NoError(t, err)
+
+	const chainID = "gonka-test"
+	epochID := uint64(7)
+	bm := NewBlsManager(createMockCosmosClient())
+	dealerAddress := bm.cosmosClient.GetAddress()
+	participants := []ParticipantInfo{
+		{Address: dealerAddress, Secp256K1PublicKey: primaryKey, SlotStartIndex: 0, SlotEndIndex: 1},
+		{Address: "gonka1bob", Secp256K1PublicKey: otherKey, SlotStartIndex: 2, SlotEndIndex: 3},
+	}
+
+	dealerPart, err := bm.generateDealerPart(epochID, chainID, 4, 2, participants)
+	require.NoError(t, err)
+	require.Len(t, dealerPart.ProofOfPossession, 48)
+
+	k, ctx := keepertest.BlsKeeper(t)
+	chainParticipants := make([]types.BLSParticipantInfo, len(participants))
+	for i, participant := range participants {
+		chainParticipants[i] = types.BLSParticipantInfo{
+			Address:            participant.Address,
+			Secp256K1PublicKey: participant.Secp256K1PublicKey,
+			SlotStartIndex:     participant.SlotStartIndex,
+			SlotEndIndex:       participant.SlotEndIndex,
+		}
+	}
+	require.NoError(t, k.SetEpochBLSData(ctx, types.EpochBLSData{
+		EpochId:                   epochID,
+		ITotalSlots:               4,
+		TSlotsDegree:              2,
+		DkgPhase:                  types.DKGPhase_DKG_PHASE_DEALING,
+		DealingPhaseDeadlineBlock: ctx.BlockHeight() + 100,
+		Participants:              chainParticipants,
+		DealerParts:               []*types.DealerPartStorage{{}, {}},
+	}))
+	ms := keeper.NewMsgServerImpl(k)
+
+	_, err = ms.SubmitDealerPart(ctx.WithChainID("gonka-other"), dealerPart)
+	require.ErrorContains(t, err, "proof of possession")
+
+	_, err = ms.SubmitDealerPart(ctx.WithChainID(chainID), dealerPart)
+	require.NoError(t, err)
+
+	stored, err := k.GetEpochBLSData(ctx, epochID)
+	require.NoError(t, err)
+	require.Equal(t, dealerAddress, stored.DealerParts[0].DealerAddress)
+}

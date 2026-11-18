@@ -61,7 +61,8 @@ func (ms msgServer) SubmitVerificationVector(ctx context.Context, msg *types.Msg
 		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("dealer_validity length %d does not match participants count %d", len(msg.DealerValidity), len(epochBLSData.Participants)))
 	}
 
-	if err := ms.validateDealerValidityProofs(msg, &epochBLSData, participantIndex); err != nil {
+	provenDealerValidity, err := ms.validateDealerValidityProofs(msg, &epochBLSData, participantIndex)
+	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -81,7 +82,7 @@ func (ms msgServer) SubmitVerificationVector(ctx context.Context, msg *types.Msg
 	// epochBLSData is still updated below so the complaint-persistence
 	// loop sees a consistent view of the current submission.
 	submission := &types.VerificationVectorSubmission{
-		DealerValidity: msg.DealerValidity,
+		DealerValidity: provenDealerValidity,
 	}
 	if err := ms.SetVerificationSubmission(sdkCtx, msg.EpochId, uint32(participantIndex), submission); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to persist verification submission for epoch %d: %v", msg.EpochId, err))
@@ -176,7 +177,9 @@ func (ms msgServer) SubmitVerificationVector(ctx context.Context, msg *types.Msg
 	return &types.MsgSubmitVerificationVectorResponse{}, nil
 }
 
-func (ms msgServer) validateDealerValidityProofs(msg *types.MsgSubmitVerificationVector, epochBLSData *types.EpochBLSData, participantIndex int) error {
+// validateDealerValidityProofs returns the verifier's votes with every vote whose proof fails verification set to false.
+// Only a malformed proof set is an error, so one bad proof does not discard the verifier's complaints and other votes.
+func (ms msgServer) validateDealerValidityProofs(msg *types.MsgSubmitVerificationVector, epochBLSData *types.EpochBLSData, participantIndex int) ([]bool, error) {
 	trueNonSelfDealerCount := 0
 	selfMarkedTrue := participantIndex >= 0 && participantIndex < len(msg.DealerValidity) && msg.DealerValidity[participantIndex]
 	for dealerIndex, isValid := range msg.DealerValidity {
@@ -192,14 +195,14 @@ func (ms msgServer) validateDealerValidityProofs(msg *types.MsgSubmitVerificatio
 	}
 	if len(msg.DealerValidityProofs) < trueNonSelfDealerCount || len(msg.DealerValidityProofs) > maxProofCount {
 		if selfMarkedTrue {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"dealer_validity_proofs count %d is invalid: expected %d (without self proof) or %d (with optional self proof)",
 				len(msg.DealerValidityProofs),
 				trueNonSelfDealerCount,
 				maxProofCount,
 			)
 		}
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"dealer_validity_proofs count %d does not match true non-self dealer count %d",
 			len(msg.DealerValidityProofs),
 			trueNonSelfDealerCount,
@@ -211,25 +214,28 @@ func (ms msgServer) validateDealerValidityProofs(msg *types.MsgSubmitVerificatio
 	for i := range msg.DealerValidityProofs {
 		proof := &msg.DealerValidityProofs[i]
 		if proof.DealerIndex >= uint32(len(epochBLSData.Participants)) {
-			return fmt.Errorf("dealer_validity_proofs[%d].dealer_index %d out of range", i, proof.DealerIndex)
+			return nil, fmt.Errorf("dealer_validity_proofs[%d].dealer_index %d out of range", i, proof.DealerIndex)
 		}
 		if len(proof.ProofSignature) == 0 {
-			return fmt.Errorf("dealer_validity_proofs[%d].proof_signature must be non-empty", i)
+			return nil, fmt.Errorf("dealer_validity_proofs[%d].proof_signature must be non-empty", i)
 		}
 		dealerIndex := int(proof.DealerIndex)
 		if dealerIndex >= len(msg.DealerValidity) || !msg.DealerValidity[dealerIndex] {
-			return fmt.Errorf("proof provided for dealer %d that is marked false", proof.DealerIndex)
+			return nil, fmt.Errorf("proof provided for dealer %d that is marked false", proof.DealerIndex)
 		}
 		if proofsByDealer[dealerIndex] != nil {
-			return fmt.Errorf("duplicate proof for dealer %d", proof.DealerIndex)
+			return nil, fmt.Errorf("duplicate proof for dealer %d", proof.DealerIndex)
 		}
 		proofsByDealer[dealerIndex] = proof
 	}
 
 	slotIndices, err := participantSlotIndices(epochBLSData, participantIndex)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	provenDealerValidity := make([]bool, len(msg.DealerValidity))
+	copy(provenDealerValidity, msg.DealerValidity)
 
 	// Deterministic iteration: walk dealer_validity by index
 	for dealerIndex, isValid := range msg.DealerValidity {
@@ -242,14 +248,21 @@ func (ms msgServer) validateDealerValidityProofs(msg *types.MsgSubmitVerificatio
 
 		proof := proofsByDealer[dealerIndex]
 		if proof == nil {
-			return fmt.Errorf("missing proof for dealer %d", dealerIndex)
+			return nil, fmt.Errorf("missing proof for dealer %d", dealerIndex)
 		}
 		if err := ms.verifyDealerValidityProof(epochBLSData, dealerIndex, slotIndices, proof.ProofSignature); err != nil {
-			return fmt.Errorf("invalid proof for dealer %d: %w", dealerIndex, err)
+			ms.Logger().Warn(
+				"Dealer validity proof failed, recording the vote as invalid",
+				"epoch_id", msg.EpochId,
+				"participant", msg.Creator,
+				"dealer_index", dealerIndex,
+				"error", err,
+			)
+			provenDealerValidity[dealerIndex] = false
 		}
 	}
 
-	return nil
+	return provenDealerValidity, nil
 }
 
 func participantSlotIndices(epochBLSData *types.EpochBLSData, participantIndex int) ([]uint32, error) {
@@ -383,8 +396,12 @@ func buildDealerSlotPublicKeysForSlots(commitments [][]byte, totalSlots uint32, 
 			power.Mul(&power, &x)
 		}
 
-		slotPublicKey := blst.P2AffinesMult(commitmentPoints, scalars, 255)
-		slotPublicKeys[slotIndex] = slotPublicKey.ToAffine().Compress()
+		slotPublicKey := blst.P2AffinesMult(commitmentPoints, scalars, 255).ToAffine()
+		// The commitments are in G2, so KeyValidate fails only for the identity, which is the key of a zero share.
+		if !slotPublicKey.KeyValidate() {
+			return nil, fmt.Errorf("slot %d public key is the identity", slotIndex)
+		}
+		slotPublicKeys[slotIndex] = slotPublicKey.Compress()
 	}
 
 	return slotPublicKeys, nil

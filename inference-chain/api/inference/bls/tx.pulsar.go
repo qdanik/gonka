@@ -974,6 +974,7 @@ var (
 	fd_MsgSubmitDealerPart_epoch_id                          protoreflect.FieldDescriptor
 	fd_MsgSubmitDealerPart_commitments                       protoreflect.FieldDescriptor
 	fd_MsgSubmitDealerPart_encrypted_shares_for_participants protoreflect.FieldDescriptor
+	fd_MsgSubmitDealerPart_proof_of_possession               protoreflect.FieldDescriptor
 )
 
 func init() {
@@ -983,6 +984,7 @@ func init() {
 	fd_MsgSubmitDealerPart_epoch_id = md_MsgSubmitDealerPart.Fields().ByName("epoch_id")
 	fd_MsgSubmitDealerPart_commitments = md_MsgSubmitDealerPart.Fields().ByName("commitments")
 	fd_MsgSubmitDealerPart_encrypted_shares_for_participants = md_MsgSubmitDealerPart.Fields().ByName("encrypted_shares_for_participants")
+	fd_MsgSubmitDealerPart_proof_of_possession = md_MsgSubmitDealerPart.Fields().ByName("proof_of_possession")
 }
 
 var _ protoreflect.Message = (*fastReflection_MsgSubmitDealerPart)(nil)
@@ -1074,6 +1076,12 @@ func (x *fastReflection_MsgSubmitDealerPart) Range(f func(protoreflect.FieldDesc
 			return
 		}
 	}
+	if len(x.ProofOfPossession) != 0 {
+		value := protoreflect.ValueOfBytes(x.ProofOfPossession)
+		if !f(fd_MsgSubmitDealerPart_proof_of_possession, value) {
+			return
+		}
+	}
 }
 
 // Has reports whether a field is populated.
@@ -1097,6 +1105,8 @@ func (x *fastReflection_MsgSubmitDealerPart) Has(fd protoreflect.FieldDescriptor
 		return len(x.Commitments) != 0
 	case "inference.bls.MsgSubmitDealerPart.encrypted_shares_for_participants":
 		return len(x.EncryptedSharesForParticipants) != 0
+	case "inference.bls.MsgSubmitDealerPart.proof_of_possession":
+		return len(x.ProofOfPossession) != 0
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.bls.MsgSubmitDealerPart"))
@@ -1121,6 +1131,8 @@ func (x *fastReflection_MsgSubmitDealerPart) Clear(fd protoreflect.FieldDescript
 		x.Commitments = nil
 	case "inference.bls.MsgSubmitDealerPart.encrypted_shares_for_participants":
 		x.EncryptedSharesForParticipants = nil
+	case "inference.bls.MsgSubmitDealerPart.proof_of_possession":
+		x.ProofOfPossession = nil
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.bls.MsgSubmitDealerPart"))
@@ -1155,6 +1167,9 @@ func (x *fastReflection_MsgSubmitDealerPart) Get(descriptor protoreflect.FieldDe
 		}
 		listValue := &_MsgSubmitDealerPart_4_list{list: &x.EncryptedSharesForParticipants}
 		return protoreflect.ValueOfList(listValue)
+	case "inference.bls.MsgSubmitDealerPart.proof_of_possession":
+		value := x.ProofOfPossession
+		return protoreflect.ValueOfBytes(value)
 	default:
 		if descriptor.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.bls.MsgSubmitDealerPart"))
@@ -1187,6 +1202,8 @@ func (x *fastReflection_MsgSubmitDealerPart) Set(fd protoreflect.FieldDescriptor
 		lv := value.List()
 		clv := lv.(*_MsgSubmitDealerPart_4_list)
 		x.EncryptedSharesForParticipants = *clv.list
+	case "inference.bls.MsgSubmitDealerPart.proof_of_possession":
+		x.ProofOfPossession = value.Bytes()
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.bls.MsgSubmitDealerPart"))
@@ -1223,6 +1240,8 @@ func (x *fastReflection_MsgSubmitDealerPart) Mutable(fd protoreflect.FieldDescri
 		panic(fmt.Errorf("field creator of message inference.bls.MsgSubmitDealerPart is not mutable"))
 	case "inference.bls.MsgSubmitDealerPart.epoch_id":
 		panic(fmt.Errorf("field epoch_id of message inference.bls.MsgSubmitDealerPart is not mutable"))
+	case "inference.bls.MsgSubmitDealerPart.proof_of_possession":
+		panic(fmt.Errorf("field proof_of_possession of message inference.bls.MsgSubmitDealerPart is not mutable"))
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.bls.MsgSubmitDealerPart"))
@@ -1246,6 +1265,8 @@ func (x *fastReflection_MsgSubmitDealerPart) NewField(fd protoreflect.FieldDescr
 	case "inference.bls.MsgSubmitDealerPart.encrypted_shares_for_participants":
 		list := []*EncryptedSharesForParticipant{}
 		return protoreflect.ValueOfList(&_MsgSubmitDealerPart_4_list{list: &list})
+	case "inference.bls.MsgSubmitDealerPart.proof_of_possession":
+		return protoreflect.ValueOfBytes(nil)
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.bls.MsgSubmitDealerPart"))
@@ -1334,6 +1355,10 @@ func (x *fastReflection_MsgSubmitDealerPart) ProtoMethods() *protoiface.Methods 
 				n += 1 + l + runtime.Sov(uint64(l))
 			}
 		}
+		l = len(x.ProofOfPossession)
+		if l > 0 {
+			n += 1 + l + runtime.Sov(uint64(l))
+		}
 		if x.unknownFields != nil {
 			n += len(x.unknownFields)
 		}
@@ -1362,6 +1387,13 @@ func (x *fastReflection_MsgSubmitDealerPart) ProtoMethods() *protoiface.Methods 
 		if x.unknownFields != nil {
 			i -= len(x.unknownFields)
 			copy(dAtA[i:], x.unknownFields)
+		}
+		if len(x.ProofOfPossession) > 0 {
+			i -= len(x.ProofOfPossession)
+			copy(dAtA[i:], x.ProofOfPossession)
+			i = runtime.EncodeVarint(dAtA, i, uint64(len(x.ProofOfPossession)))
+			i--
+			dAtA[i] = 0x2a
 		}
 		if len(x.EncryptedSharesForParticipants) > 0 {
 			for iNdEx := len(x.EncryptedSharesForParticipants) - 1; iNdEx >= 0; iNdEx-- {
@@ -1564,6 +1596,40 @@ func (x *fastReflection_MsgSubmitDealerPart) ProtoMethods() *protoiface.Methods 
 				x.EncryptedSharesForParticipants = append(x.EncryptedSharesForParticipants, &EncryptedSharesForParticipant{})
 				if err := options.Unmarshal(dAtA[iNdEx:postIndex], x.EncryptedSharesForParticipants[len(x.EncryptedSharesForParticipants)-1]); err != nil {
 					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, err
+				}
+				iNdEx = postIndex
+			case 5:
+				if wireType != 2 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: wrong wireType = %d for field ProofOfPossession", wireType)
+				}
+				var byteLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					byteLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if byteLen < 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrInvalidLength
+				}
+				postIndex := iNdEx + byteLen
+				if postIndex < 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrInvalidLength
+				}
+				if postIndex > l {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+				}
+				x.ProofOfPossession = append(x.ProofOfPossession[:0], dAtA[iNdEx:postIndex]...)
+				if x.ProofOfPossession == nil {
+					x.ProofOfPossession = []byte{}
 				}
 				iNdEx = postIndex
 			default:
@@ -9144,6 +9210,8 @@ type MsgSubmitDealerPart struct {
 	// encrypted_shares_for_participants contains encrypted shares for all participants in order
 	// Index i = shares for EpochBLSData.participants[i]
 	EncryptedSharesForParticipants []*EncryptedSharesForParticipant `protobuf:"bytes,4,rep,name=encrypted_shares_for_participants,json=encryptedSharesForParticipants,proto3" json:"encrypted_shares_for_participants,omitempty"`
+	// proof_of_possession is a G1 signature, made with the secret behind commitments[0], over the dealer address, epoch id and chain id
+	ProofOfPossession []byte `protobuf:"bytes,5,opt,name=proof_of_possession,json=proofOfPossession,proto3" json:"proof_of_possession,omitempty"`
 }
 
 func (x *MsgSubmitDealerPart) Reset() {
@@ -9190,6 +9258,13 @@ func (x *MsgSubmitDealerPart) GetCommitments() [][]byte {
 func (x *MsgSubmitDealerPart) GetEncryptedSharesForParticipants() []*EncryptedSharesForParticipant {
 	if x != nil {
 		return x.EncryptedSharesForParticipants
+	}
+	return nil
+}
+
+func (x *MsgSubmitDealerPart) GetProofOfPossession() []byte {
+	if x != nil {
+		return x.ProofOfPossession
 	}
 	return nil
 }
@@ -9898,7 +9973,7 @@ var file_inference_bls_tx_proto_rawDesc = []byte{
 	0x78, 0x2f, 0x62, 0x6c, 0x73, 0x2f, 0x4d, 0x73, 0x67, 0x55, 0x70, 0x64, 0x61, 0x74, 0x65, 0x50,
 	0x61, 0x72, 0x61, 0x6d, 0x73, 0x22, 0x19, 0x0a, 0x17, 0x4d, 0x73, 0x67, 0x55, 0x70, 0x64, 0x61,
 	0x74, 0x65, 0x50, 0x61, 0x72, 0x61, 0x6d, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x22, 0xbb, 0x02, 0x0a, 0x13, 0x4d, 0x73, 0x67, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x44, 0x65,
+	0x22, 0xeb, 0x02, 0x0a, 0x13, 0x4d, 0x73, 0x67, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x44, 0x65,
 	0x61, 0x6c, 0x65, 0x72, 0x50, 0x61, 0x72, 0x74, 0x12, 0x32, 0x0a, 0x07, 0x63, 0x72, 0x65, 0x61,
 	0x74, 0x6f, 0x72, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x42, 0x18, 0xd2, 0xb4, 0x2d, 0x14, 0x63,
 	0x6f, 0x73, 0x6d, 0x6f, 0x73, 0x2e, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x53, 0x74, 0x72,
@@ -9914,7 +9989,10 @@ var file_inference_bls_tx_proto_rawDesc = []byte{
 	0x61, 0x72, 0x65, 0x73, 0x46, 0x6f, 0x72, 0x50, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61,
 	0x6e, 0x74, 0x42, 0x04, 0xc8, 0xde, 0x1f, 0x00, 0x52, 0x1e, 0x65, 0x6e, 0x63, 0x72, 0x79, 0x70,
 	0x74, 0x65, 0x64, 0x53, 0x68, 0x61, 0x72, 0x65, 0x73, 0x46, 0x6f, 0x72, 0x50, 0x61, 0x72, 0x74,
-	0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x73, 0x3a, 0x34, 0x82, 0xe7, 0xb0, 0x2a, 0x07, 0x63,
+	0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x73, 0x12, 0x2e, 0x0a, 0x13, 0x70, 0x72, 0x6f, 0x6f,
+	0x66, 0x5f, 0x6f, 0x66, 0x5f, 0x70, 0x6f, 0x73, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x18,
+	0x05, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x11, 0x70, 0x72, 0x6f, 0x6f, 0x66, 0x4f, 0x66, 0x50, 0x6f,
+	0x73, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x3a, 0x34, 0x82, 0xe7, 0xb0, 0x2a, 0x07, 0x63,
 	0x72, 0x65, 0x61, 0x74, 0x6f, 0x72, 0x8a, 0xe7, 0xb0, 0x2a, 0x23, 0x69, 0x6e, 0x66, 0x65, 0x72,
 	0x65, 0x6e, 0x63, 0x65, 0x2f, 0x78, 0x2f, 0x62, 0x6c, 0x73, 0x2f, 0x4d, 0x73, 0x67, 0x53, 0x75,
 	0x62, 0x6d, 0x69, 0x74, 0x44, 0x65, 0x61, 0x6c, 0x65, 0x72, 0x50, 0x61, 0x72, 0x74, 0x22, 0x1d,

@@ -913,11 +913,18 @@ func TestBLSKeyGeneration_EndToEndOffCurveRegression(t *testing.T) {
 				}
 			}
 
+			proofHash := blstypes.BuildDealerProofOfPossessionHash(ctx.ChainID(), epochID, dealer.Address)
+			proofG1 := hashToG1ForTest(t, proofHash)
+			var proofOfPossession bls12381.G1Affine
+			proofOfPossession.ScalarMultiplication(&proofG1, dealerCoeffs[dealerIdx][0].BigInt(new(big.Int)))
+			proofOfPossessionBytes := proofOfPossession.Bytes()
+
 			_, err := blsMsgServer.SubmitDealerPart(sdk.WrapSDKContext(ctx), &blstypes.MsgSubmitDealerPart{
 				Creator:                        dealer.Address,
 				EpochId:                        epochID,
 				Commitments:                    commitments,
 				EncryptedSharesForParticipants: encryptedShares,
+				ProofOfPossession:              proofOfPossessionBytes[:],
 			})
 			require.NoError(t, err)
 		}
@@ -1202,5 +1209,3 @@ func BenchmarkInitiateBLSKeyGenerationSnapshotValidation(b *testing.B) {
 		appModule.InitiateBLSKeyGeneration(baseCtx, epochID, activeParticipants)
 	}
 }
-
-

@@ -300,3 +300,77 @@ func mustMakeG2CommitmentForScalar(t *testing.T, scalar uint64) []byte {
 	commitment := point.Bytes()
 	return commitment[:]
 }
+
+// Test flow:
+// 1. Deal a degree-one polynomial with a root at the complainer's slot, so the committed share for that slot is zero.
+// 2. Encrypt the zero share to the complainer, once as zero bytes and once as the field modulus, and answer the complaint by opening it.
+// 3. Check that the answer is refused and the dealer, not the complainer, is removed.
+func TestApplyDealerComplaintOutcomes_ZeroShareResponseRemovesDealer(t *testing.T) {
+	k := Keeper{}
+	disputedSlot := uint32(1)
+
+	complainerPriv, err := secp256k1.GeneratePrivateKey()
+	require.NoError(t, err)
+	complainerPubKey := complainerPriv.PubKey().SerializeCompressed()
+
+	_, _, _, g2Gen := bls12381.Generators()
+	var constantTerm fr.Element
+	constantTerm.SetUint64(uint64(disputedSlot + 1))
+	constantTerm.Neg(&constantTerm)
+	var constantCommitment bls12381.G2Affine
+	constantCommitment.ScalarMultiplication(&g2Gen, constantTerm.BigInt(new(big.Int)))
+	constantCommitmentBytes := constantCommitment.Bytes()
+	commitments := [][]byte{constantCommitmentBytes[:], mustMakeG2CommitmentForScalar(t, 1)}
+
+	seed := make([]byte, dkgOpeningSeedLen)
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+
+	zeroShareEncodings := map[string][]byte{
+		"zero bytes":    make([]byte, dkgShareBytesLen),
+		"field modulus": fr.Modulus().FillBytes(make([]byte, dkgShareBytesLen)),
+	}
+	for name, shareBytes := range zeroShareEncodings {
+		ciphertext, err := encryptWithSeedForParticipant(shareBytes, complainerPubKey, seed)
+		require.NoError(t, err, name)
+
+		epoch := types.EpochBLSData{
+			EpochId: 11,
+			Participants: []types.BLSParticipantInfo{
+				{Address: "p0", SlotStartIndex: 0, SlotEndIndex: 0},
+				{Address: "p1", Secp256K1PublicKey: complainerPubKey, SlotStartIndex: disputedSlot, SlotEndIndex: disputedSlot},
+			},
+			DealerParts: []*types.DealerPartStorage{
+				{
+					DealerAddress: "p0",
+					Commitments:   commitments,
+					ParticipantShares: []*types.EncryptedSharesForParticipant{
+						{EncryptedShares: [][]byte{}},
+						{EncryptedShares: [][]byte{ciphertext}},
+					},
+				},
+				{DealerAddress: "p1"},
+			},
+			DealerComplaints: []types.DealerComplaint{
+				{
+					DealerIndex:             0,
+					ComplainerIndex:         1,
+					DisputedSlotIndex:       disputedSlot,
+					DisputedCiphertextIndex: 0,
+					ResponseSubmitted:       true,
+					ResponseShareBytes:      shareBytes,
+					ResponseOpeningMaterial: seed,
+				},
+			},
+		}
+
+		responseValid, err := k.verifyDealerComplaintResponse(&epoch, &epoch.DealerComplaints[0])
+		require.NoError(t, err, name)
+		require.False(t, responseValid, name)
+
+		final, err := k.applyDealerComplaintOutcomes(&epoch, []bool{true, true})
+		require.NoError(t, err, name)
+		require.Equal(t, []bool{false, true}, final, name)
+	}
+}

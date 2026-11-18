@@ -8,6 +8,7 @@ import (
 
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fp"
+	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	hashToCurve "github.com/consensys/gnark-crypto/ecc/bls12-381/hash_to_curve"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -704,4 +705,59 @@ func createTestEpochBLSDataInVerifyingPhase(epochID uint64, numParticipants int)
 	epochData.VerifyingPhaseDeadlineBlock = 200
 
 	return epochData
+}
+
+// Test flow:
+// 1. Open a verifying round where dealer 1 dealt the verifier a zero share at one slot, and dealers 2 and 3 dealt full polynomials.
+// 2. The verifier votes dealers 1 and 2 valid, with a per-slot proof built from its shares, and votes dealer 3 invalid with a complaint.
+// 3. Submit the message; expect it to be accepted although the proof for dealer 1 cannot verify.
+// 4. Check that the vote for dealer 1 is stored as invalid, the vote for dealer 2 stands, and the complaint against dealer 3 is stored.
+func TestSubmitVerificationVector_FailedProofKeepsComplaintAndOtherVotes(t *testing.T) {
+	k, msgServer, goCtx := setupMsgServerVerification(t)
+	ctx := sdk.UnwrapSDKContext(goCtx)
+
+	epochID := uint64(120)
+	epochBLSData := createTestEpochBLSDataInVerifyingPhase(epochID, 4)
+	verifier := epochBLSData.Participants[0]
+	verifierSlots := int(verifier.SlotEndIndex-verifier.SlotStartIndex) + 1
+	degree := int(epochBLSData.TSlotsDegree)
+
+	polynomials := map[int][]fr.Element{
+		1: polynomialWithRootAt(t, degree, uint64(verifier.SlotStartIndex+1)),
+		2: randomPolynomial(t, degree),
+		3: randomPolynomial(t, degree),
+	}
+	for dealerIndex, polynomial := range polynomials {
+		epochBLSData.DealerParts[dealerIndex] = &types.DealerPartStorage{
+			DealerAddress: epochBLSData.Participants[dealerIndex].Address,
+			Commitments:   polynomialCommitments(polynomial),
+			ParticipantShares: []*types.EncryptedSharesForParticipant{
+				{EncryptedShares: dummyEncryptedShares(verifierSlots)},
+			},
+		}
+	}
+	require.NoError(t, k.SetEpochBLSData(ctx, epochBLSData))
+
+	msg := &types.MsgSubmitVerificationVector{
+		Creator:        verifier.Address,
+		EpochId:        epochID,
+		DealerValidity: []bool{false, true, true, false},
+		DealerComplaints: []types.VerificationDealerComplaint{
+			{DealerIndex: 3, DisputedSlotIndex: verifier.SlotStartIndex, DisputedCiphertextIndex: 0},
+		},
+		DealerValidityProofs: []types.DealerValidityProof{
+			{DealerIndex: 1, ProofSignature: dealerValidityProofSignature(t, epochID, 1, polynomials[1], verifier)},
+			{DealerIndex: 2, ProofSignature: dealerValidityProofSignature(t, epochID, 2, polynomials[2], verifier)},
+		},
+	}
+
+	_, err := msgServer.SubmitVerificationVector(goCtx, msg)
+	require.NoError(t, err)
+
+	storedData, err := k.GetEpochBLSData(ctx, epochID)
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, false, true, false}, storedData.VerificationSubmissions[0].DealerValidity)
+	require.Len(t, storedData.DealerComplaints, 1)
+	require.Equal(t, uint32(3), storedData.DealerComplaints[0].DealerIndex)
+	require.Equal(t, uint32(0), storedData.DealerComplaints[0].ComplainerIndex)
 }

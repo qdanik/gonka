@@ -2,12 +2,15 @@ package keeper_test
 
 import (
 	"context"
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"cosmossdk.io/math"
+	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
+	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	keepertest "github.com/productscience/inference/testutil/keeper"
 	"github.com/productscience/inference/x/bls/keeper"
@@ -66,18 +69,17 @@ func TestSubmitDealerPart_Success(t *testing.T) {
 	k.SetEpochBLSData(ctx, epochBLSData)
 
 	// Create test message
+	polynomial := randomPolynomial(t, int(epochBLSData.TSlotsDegree))
 	msg := &types.MsgSubmitDealerPart{
-		Creator: dealerAddr,
-		EpochId: epochID,
-		Commitments: [][]byte{
-			[]byte("commitment1"),
-			[]byte("commitment2"),
-		},
+		Creator:     dealerAddr,
+		EpochId:     epochID,
+		Commitments: polynomialCommitments(polynomial),
 		EncryptedSharesForParticipants: []types.EncryptedSharesForParticipant{
 			{EncryptedShares: [][]byte{dummyEncryptedShare(1)}},
 			{EncryptedShares: [][]byte{dummyEncryptedShare(2)}},
 			{EncryptedShares: [][]byte{dummyEncryptedShare(3)}},
 		},
+		ProofOfPossession: dealerProofOfPossession(t, ctx.ChainID(), epochID, dealerAddr, polynomial[0]),
 	}
 
 	// Execute
@@ -467,16 +469,15 @@ func TestSubmitDealerPart_EventEmission(t *testing.T) {
 	}
 	k.SetEpochBLSData(ctx, epochBLSData)
 
+	polynomial := randomPolynomial(t, int(epochBLSData.TSlotsDegree))
 	msg := &types.MsgSubmitDealerPart{
-		Creator: dealerAddr,
-		EpochId: epochID,
-		Commitments: [][]byte{
-			[]byte("commitment1"),
-			[]byte("commitment2"),
-		},
+		Creator:     dealerAddr,
+		EpochId:     epochID,
+		Commitments: polynomialCommitments(polynomial),
 		EncryptedSharesForParticipants: []types.EncryptedSharesForParticipant{
 			{EncryptedShares: [][]byte{dummyEncryptedShare(1)}},
 		},
+		ProofOfPossession: dealerProofOfPossession(t, ctx.ChainID(), epochID, dealerAddr, polynomial[0]),
 	}
 
 	// Execute
@@ -512,4 +513,122 @@ func TestSubmitDealerPart_EventEmission(t *testing.T) {
 	}
 	assert.True(t, epochAttr, "Event should contain epoch_id")
 	assert.True(t, dealerAttr, "Event should contain dealer_address")
+}
+
+// Test flow:
+// 1. Open a dealing round with three participants and let the two honest dealers submit parts with valid proofs of possession.
+// 2. Build the last dealer's first commitment as s*G2 minus the honest first commitments, so the group key would be s*G2.
+// 3. Submit that part with no proof, with a proof signed by s, and with an honest dealer's proof; expect each to be rejected.
+// 4. Check that no part was stored for the last dealer.
+func TestSubmitDealerPart_RogueFirstCommitmentRejected(t *testing.T) {
+	k, ms, goCtx := setupMsgServerDealer(t)
+	ctx := sdk.UnwrapSDKContext(goCtx).WithChainID("gonka-test")
+
+	epochID := uint64(7)
+	epoch := dealingEpoch(epochID, []string{"rogue", "honest1", "honest2"}, 2, ctx.BlockHeight()+100)
+	require.NoError(t, k.SetEpochBLSData(ctx, epoch))
+	degree := int(epoch.TSlotsDegree)
+
+	var honestFirstCommitments bls12381.G2Jac
+	var honestProof []byte
+	for dealerIndex := 1; dealerIndex <= 2; dealerIndex++ {
+		polynomial := randomPolynomial(t, degree)
+		commitments := polynomialCommitments(polynomial)
+		honestProof = dealerProofOfPossession(t, ctx.ChainID(), epochID, epoch.Participants[dealerIndex].Address, polynomial[0])
+		_, err := ms.SubmitDealerPart(ctx, dealerPartMsg(epoch, dealerIndex, commitments, honestProof))
+		require.NoError(t, err)
+
+		var firstCommitment bls12381.G2Affine
+		_, err = firstCommitment.SetBytes(commitments[0])
+		require.NoError(t, err)
+		honestFirstCommitments.AddMixed(&firstCommitment)
+	}
+
+	var groupSecret fr.Element
+	_, err := groupSecret.SetRandom()
+	require.NoError(t, err)
+	var rogueFirstCommitment bls12381.G2Jac
+	rogueFirstCommitment.ScalarMultiplicationBase(groupSecret.BigInt(new(big.Int)))
+	rogueFirstCommitment.SubAssign(&honestFirstCommitments)
+	var rogueFirstCommitmentAffine bls12381.G2Affine
+	rogueFirstCommitmentAffine.FromJacobian(&rogueFirstCommitment)
+	rogueFirstCommitmentBytes := rogueFirstCommitmentAffine.Bytes()
+
+	rogueCommitments := polynomialCommitments(randomPolynomial(t, degree))
+	rogueCommitments[0] = rogueFirstCommitmentBytes[:]
+
+	proofs := map[string][]byte{
+		"no proof":              nil,
+		"proof signed by s":     dealerProofOfPossession(t, ctx.ChainID(), epochID, "rogue", groupSecret),
+		"honest dealer's proof": honestProof,
+	}
+	for name, proof := range proofs {
+		_, err := ms.SubmitDealerPart(ctx, dealerPartMsg(epoch, 0, rogueCommitments, proof))
+		require.ErrorContains(t, err, "proof of possession", name)
+	}
+
+	stored, err := k.GetEpochBLSData(ctx, epochID)
+	require.NoError(t, err)
+	require.Empty(t, stored.DealerParts[0].DealerAddress)
+}
+
+// Test flow:
+// 1. Open a dealing round and build one honest dealer part.
+// 2. Sign the proof of possession for another dealer address, another epoch id and another chain id; expect each part to be rejected.
+// 3. Sign the proof for this dealer, epoch and chain; expect the part to be stored.
+func TestSubmitDealerPart_ProofOfPossessionBoundToDealerEpochAndChain(t *testing.T) {
+	k, ms, goCtx := setupMsgServerDealer(t)
+	ctx := sdk.UnwrapSDKContext(goCtx).WithChainID("gonka-test")
+
+	epochID := uint64(7)
+	epoch := dealingEpoch(epochID, []string{"dealer1", "dealer2", "dealer3"}, 2, ctx.BlockHeight()+100)
+	require.NoError(t, k.SetEpochBLSData(ctx, epoch))
+
+	polynomial := randomPolynomial(t, int(epoch.TSlotsDegree))
+	commitments := polynomialCommitments(polynomial)
+
+	wrongBindings := map[string][]byte{
+		"another dealer": dealerProofOfPossession(t, ctx.ChainID(), epochID, "dealer2", polynomial[0]),
+		"another epoch":  dealerProofOfPossession(t, ctx.ChainID(), epochID+1, "dealer1", polynomial[0]),
+		"another chain":  dealerProofOfPossession(t, "gonka-other", epochID, "dealer1", polynomial[0]),
+	}
+	for name, proof := range wrongBindings {
+		_, err := ms.SubmitDealerPart(ctx, dealerPartMsg(epoch, 0, commitments, proof))
+		require.ErrorContains(t, err, "proof of possession", name)
+	}
+
+	proof := dealerProofOfPossession(t, ctx.ChainID(), epochID, "dealer1", polynomial[0])
+	_, err := ms.SubmitDealerPart(ctx, dealerPartMsg(epoch, 0, commitments, proof))
+	require.NoError(t, err)
+
+	stored, err := k.GetEpochBLSData(ctx, epochID)
+	require.NoError(t, err)
+	require.Equal(t, "dealer1", stored.DealerParts[0].DealerAddress)
+	require.Equal(t, commitments, stored.DealerParts[0].Commitments)
+}
+
+// Test flow:
+// 1. Open a dealing round with three participants.
+// 2. Build a dealer polynomial with a root at one slot of another participant, with a valid proof of possession.
+// 3. Submit the part; expect it to be rejected and not stored.
+func TestSubmitDealerPart_ZeroShareAtSlotRejected(t *testing.T) {
+	k, ms, goCtx := setupMsgServerDealer(t)
+	ctx := sdk.UnwrapSDKContext(goCtx).WithChainID("gonka-test")
+
+	epochID := uint64(7)
+	epoch := dealingEpoch(epochID, []string{"dealer1", "dealer2", "dealer3"}, 2, ctx.BlockHeight()+100)
+	require.NoError(t, k.SetEpochBLSData(ctx, epoch))
+
+	victimSlot := epoch.Participants[2].SlotStartIndex
+	polynomial := polynomialWithRootAt(t, int(epoch.TSlotsDegree), uint64(victimSlot+1))
+	zeroShare := evaluatePolynomialAt(polynomial, uint64(victimSlot+1))
+	require.True(t, zeroShare.IsZero())
+
+	proof := dealerProofOfPossession(t, ctx.ChainID(), epochID, "dealer1", polynomial[0])
+	_, err := ms.SubmitDealerPart(ctx, dealerPartMsg(epoch, 0, polynomialCommitments(polynomial), proof))
+	require.ErrorContains(t, err, "identity")
+
+	stored, err := k.GetEpochBLSData(ctx, epochID)
+	require.NoError(t, err)
+	require.Empty(t, stored.DealerParts[0].DealerAddress)
 }

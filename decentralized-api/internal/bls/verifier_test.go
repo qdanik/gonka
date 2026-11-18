@@ -10,6 +10,7 @@ import (
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	"github.com/productscience/inference/x/bls/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // createMockCosmosClient creates a minimal mock cosmos client for testing
@@ -454,4 +455,29 @@ func TestRecomputeAggregatedSharesFromConsensusValidDealers_MismatchNoChange(t *
 	before := result.AggregatedShares[0].String()
 	blsManager.recomputeAggregatedSharesFromConsensusValidDealers(result)
 	assert.Equal(t, before, result.AggregatedShares[0].String())
+}
+
+// Test flow:
+// 1. Commit to a degree-one polynomial with a root at one slot, so the committed share for that slot is zero.
+// 2. Verify the zero share against the commitments for that slot; expect it to be invalid.
+// 3. Verify the non-zero share of the next slot; expect it to be valid.
+func TestVerifyShareAgainstCommitmentsBlst_ZeroShareInvalid(t *testing.T) {
+	bm := NewBlsManager(createMockCosmosClient())
+	zeroSlot := uint32(3)
+
+	constantTerm := new(fr.Element).SetUint64(uint64(zeroSlot + 1))
+	constantTerm.Neg(constantTerm)
+	polynomial := []*fr.Element{constantTerm, new(fr.Element).SetOne()}
+	commitments := computeG2CommitmentsBlst(polynomial)
+
+	zeroShare := evaluatePolynomial(polynomial, zeroSlot+1)
+	require.True(t, zeroShare.IsZero())
+	valid, err := bm.verifyShareAgainstCommitmentsBlst(zeroShare, zeroSlot, commitments)
+	require.NoError(t, err)
+	require.False(t, valid)
+
+	nextShare := evaluatePolynomial(polynomial, zeroSlot+2)
+	valid, err = bm.verifyShareAgainstCommitmentsBlst(nextShare, zeroSlot+1, commitments)
+	require.NoError(t, err)
+	require.True(t, valid)
 }

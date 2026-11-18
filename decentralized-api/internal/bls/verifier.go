@@ -553,6 +553,11 @@ func (bm *BlsManager) verifyShareAgainstCommitmentsBlst(share *fr.Element, slotI
 		return false, fmt.Errorf("no commitments provided")
 	}
 
+	// A zero share has the identity as its public key, which the chain refuses in a validity proof, so it is a bad share.
+	if share.IsZero() {
+		return false, nil
+	}
+
 	// 1. Prepare points (commitments) in blst format
 	points := make([]*blst.P2Affine, len(commitments))
 	for j, cb := range commitments {

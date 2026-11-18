@@ -77,6 +77,21 @@ func (ms msgServer) SubmitDealerPart(goCtx context.Context, msg *types.MsgSubmit
 		}
 	}
 
+	// The proof shows the dealer knows the secret behind commitments[0], so that commitment cannot be derived from other dealers' commitments.
+	proofHash := types.BuildDealerProofOfPossessionHash(ctx.ChainID(), msg.EpochId, msg.Creator)
+	if !ms.verifyFinalSignatureBlst(msg.ProofOfPossession, proofHash, msg.Commitments[0]) {
+		return nil, fmt.Errorf("invalid proof of possession for dealer %s in epoch %d", msg.Creator, msg.EpochId)
+	}
+
+	// Every slot key must be a usable public key: an identity key is a zero share, which its holder cannot prove valid.
+	allSlots := make([]uint32, epochBLSData.ITotalSlots)
+	for slot := range allSlots {
+		allSlots[slot] = uint32(slot)
+	}
+	if _, err := buildDealerSlotPublicKeysForSlots(msg.Commitments, epochBLSData.ITotalSlots, allSlots); err != nil {
+		return nil, fmt.Errorf("invalid commitments: %w", err)
+	}
+
 	// Create dealer part storage
 	participantShares := make([]*types.EncryptedSharesForParticipant, len(msg.EncryptedSharesForParticipants))
 	for i := range msg.EncryptedSharesForParticipants {

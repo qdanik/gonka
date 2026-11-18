@@ -74,6 +74,9 @@ message MsgSubmitDealerPart {
   // encrypted_shares_for_participants contains encrypted shares for all participants in order
   // Index i = shares for EpochBLSData.participants[i]
   repeated EncryptedSharesForParticipant encrypted_shares_for_participants = 4 [(gogoproto.nullable) = false];
+
+  // proof_of_possession is a G1 signature, made with the secret behind commitments[0], over the dealer address, epoch id and chain id
+  bytes proof_of_possession = 5;
 }
 
 // MsgSubmitDealerPartResponse defines the response structure for executing a
