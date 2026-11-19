@@ -82,7 +82,7 @@ func TestASurplusRetireStillFiresWhenTheLiquidMoneyWithoutItsVictimCoversTheNeed
 	t.Parallel()
 	escrows := surplusLiquidRegularEscrows(surplusLiquidRegulars)
 	state := surplusLiquidModel(escrows, surplusLiquidVictimSparePeak)
-	var retires []Retire
+	retires := make([]Retire, 0, surplusLiquidTicks)
 	for tick := range surplusLiquidTicks {
 		decision := Plan(state)
 		require.Empty(t, decision.Creates, "tick %d creates", tick)
