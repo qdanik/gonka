@@ -69,6 +69,7 @@ func newServer(self PeerID, verifier *verifier, identity transportIdentity, topi
 		Handler:           server.Handler(),
 		TLSConfig:         verifier.ServerTLSConfig(identity),
 		ReadHeaderTimeout: serverHeaderTimeout,
+		WriteTimeout:      serverWriteTimeout,
 		IdleTimeout:       serverIdleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
 		Protocols:         protocols,

@@ -65,6 +65,7 @@ const (
 
 	pollRequestTimeout  = 5 * time.Second
 	serverHeaderTimeout = 5 * time.Second
+	serverWriteTimeout  = 5 * time.Second
 	serverIdleTimeout   = 60 * time.Second
 	maxHeaderBytes      = 16 << 10
 
