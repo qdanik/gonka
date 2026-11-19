@@ -4,15 +4,15 @@ import (
 	"context"
 	"time"
 
+	"devshard/gatewayprotocol/timeoutclaim"
 	"devshard/host"
 	"devshard/user"
 )
 
 // timeoutHandler is the session's protocol-timeout entry point; *user.Session satisfies it.
 type timeoutHandler interface {
-	HandleTimeout(ctx context.Context, nonce uint64, sendTime time.Time, payload *host.InferencePayload) (user.TimeoutResult, error)
-	HandleErrorMiss(ctx context.Context, nonce uint64, finishTx, responsePayload []byte) (user.TimeoutResult, error)
-	FinishTxFor(inferenceID uint64) []byte
+	timeoutclaim.Handler
+	timeoutclaim.FinishSource
 	TimeoutDeadline(nonce uint64, sendTime time.Time) (string, time.Time)
 }
 
@@ -49,10 +49,9 @@ func (s *SessionTimeouts) SettleTimeout(ctx context.Context, step TimeoutStep) (
 }
 
 func (s *SessionTimeouts) settle(ctx context.Context, step TimeoutStep) (user.TimeoutResult, error) {
+	var finishTx, responsePayload []byte
 	if step.Kind == SettleByMissClaim && step.Proof != nil {
-		if finishTx := s.handler.FinishTxFor(step.Nonce); len(finishTx) > 0 {
-			return s.handler.HandleErrorMiss(ctx, step.Nonce, finishTx, step.Proof.ResponsePayload)
-		}
+		finishTx, responsePayload = timeoutclaim.FinishTx(step.Proof.finishTx, step.Nonce, s.handler), step.Proof.ResponsePayload
 	}
-	return s.handler.HandleTimeout(ctx, step.Nonce, step.StartedAt, s.payload)
+	return timeoutclaim.Resolve(ctx, s.handler, step.Nonce, step.StartedAt, s.payload, finishTx, responsePayload)
 }
