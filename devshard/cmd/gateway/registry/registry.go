@@ -36,6 +36,7 @@ type Deps struct {
 	Rehydrated       escrowObserver
 	ServedBindings   servedBindingObserver
 	PeerRPC          peerRPCAdoption
+	Completions      user.InferenceCompletionStore
 	Now              func() time.Time
 }
 
@@ -62,6 +63,7 @@ type Registry struct {
 	rehydrated       escrowObserver
 	servedBindings   servedBindingObserver
 	peerRPC          peerRPCAdoption
+	completions      user.InferenceCompletionStore
 	now              func() time.Time
 
 	live          atomic.Pointer[liveSet]
@@ -99,6 +101,7 @@ func New(deps Deps) *Registry {
 		rehydrated:       deps.Rehydrated,
 		servedBindings:   deps.ServedBindings,
 		peerRPC:          deps.PeerRPC,
+		completions:      deps.Completions,
 		now:              deps.Now,
 		draining:         map[*escrowEntry]struct{}{},
 		listings:         map[*Listing]struct{}{},

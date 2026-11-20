@@ -15,10 +15,12 @@ import (
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/warmup"
 	"devshard/transport"
+	"devshard/user"
 )
 
 type routingDeps struct {
 	Sessions     registry.SessionFactory
+	Completions  user.InferenceCompletionStore
 	ReadOnly     registry.SessionFactory
 	Capacity     *limits.Capacity
 	Participants *limits.ParticipantLimiter
@@ -55,6 +57,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Rehydrated:       deps.Ledger.EscrowRehydrated,
 		ServedBindings:   servedBindingStrikes(deps.Hosts, deps.Journal, deps.Served, deps.Finishes),
 		PeerRPC:          deps.PeerRPC,
+		Completions:      deps.Completions,
 		Now:              deps.Now,
 	}
 	prober := warmup.New(deps.Config, deps.Ledger.Book(), deps.Snapshots, deps.Now)

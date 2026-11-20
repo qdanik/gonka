@@ -26,6 +26,7 @@ import (
 	"devshard/logging"
 	"devshard/transport"
 	"devshard/types"
+	"devshard/user"
 )
 
 // The Retry-After a shard without room answers with, and how a host's text is cut down for a client. See README.md, "Errors and statuses".
@@ -183,6 +184,8 @@ func statusForError(err error) int {
 		return http.StatusServiceUnavailable
 	}
 	switch {
+	case errors.Is(err, user.ErrInferenceCompletionPending):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, scheduler.ErrEscrowGone):
 		return http.StatusConflict
 	case errors.Is(err, engine.ErrStopped), errors.Is(err, registry.ErrClosed):
@@ -293,7 +296,7 @@ func (s *Server) writeErrorFor(w http.ResponseWriter, err error) {
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	case chainUnreadable(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(chain.DefaultObserverPollInterval.Seconds()), 10))
-	case modelUnavailable(err), outOfFunds(err):
+	case modelUnavailable(err), outOfFunds(err), errors.Is(err, user.ErrInferenceCompletionPending):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(escrow.TickInterval.Seconds()), 10))
 	case hostsUnavailable(err), noLiveWeight(err):
 		baseMS := s.config.Load().Limits.HostCutoff.BaseMS
