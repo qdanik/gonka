@@ -5,10 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"strconv"
 	"time"
 
 	"common/storage/pgpool"
 	"common/storage/pgtimeouts"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -46,9 +49,7 @@ func openBackend(ctx context.Context, options Options) (*Backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool := stdlib.OpenDB(*cfg.ConnConfig)
-	pool.SetMaxOpenConns(int(cfg.MaxConns))
-	pool.SetMaxIdleConns(int(cfg.MaxConns))
+	pool := openPool(cfg)
 	bootCtx, cancel := context.WithTimeout(ctx, bootTimeout)
 	defer cancel()
 	if err := pool.PingContext(bootCtx); err != nil {
@@ -65,12 +66,20 @@ func openBackend(ctx context.Context, options Options) (*Backend, error) {
 	}, nil
 }
 
+func openPool(cfg *pgxpool.Config) *sql.DB {
+	pool := stdlib.OpenDB(*cfg.ConnConfig)
+	pool.SetMaxOpenConns(int(cfg.MaxConns))
+	pool.SetMaxIdleConns(int(cfg.MaxConns))
+	return pool
+}
+
 func connectionConfig(connectionString string) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(connectionString)
 	if err != nil {
 		return nil, fmt.Errorf("reading Postgres settings: %w", err)
 	}
 	pgtimeouts.ApplyConnConfig(cfg.ConnConfig)
+	fitHostsInOperation(cfg.ConnConfig, pgtimeouts.OperationTimeout())
 	cfg.ConnConfig.RuntimeParams[synchronousCommitParam] = synchronousCommitOn
 	cfg.ConnConfig.ValidateConnect = pgconn.ValidateConnectTargetSessionAttrsReadWrite
 	if err := pgpool.ConfigureMaxConns(cfg); err != nil {
@@ -80,6 +89,23 @@ func connectionConfig(connectionString string) (*pgxpool.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// fitHostsInOperation shrinks the per-host connect timeout so that a host that never answers leaves the next host and the statement a share of the operation deadline, which the dial runs under. It counts one address per host name, as pgx gives each address its own timeout.
+func fitHostsInOperation(config *pgx.ConnConfig, operation time.Duration) {
+	hosts, last := 1, hostAddress(config.Host, config.Port)
+	for _, fallback := range config.Fallbacks {
+		if address := hostAddress(fallback.Host, fallback.Port); address != last {
+			hosts, last = hosts+1, address
+		}
+	}
+	if hosts > 1 && operation > 0 {
+		config.ConnectTimeout = min(config.ConnectTimeout, operation/time.Duration(hosts+1))
+	}
+}
+
+func hostAddress(host string, port uint16) string {
+	return net.JoinHostPort(host, strconv.Itoa(int(port)))
 }
 
 // WithRetry retries a serialization failure, a deadlock or an error raised before anything reached the server. See ../README.md, "Writing under a lock".

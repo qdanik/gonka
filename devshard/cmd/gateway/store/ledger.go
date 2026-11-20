@@ -7,6 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"devshard/cmd/gateway/internal/logkey"
+	"devshard/logging"
 )
 
 // Ledger writes from one goroutine and sheds rows rather than block: its caller is on the response path.
@@ -109,6 +112,9 @@ func (l *Ledger) run() {
 	for record := range l.queue {
 		if err := l.rows.InsertRequest(context.Background(), record); err != nil {
 			l.failed.Add(1)
+			logging.Warn("accounting row lost: the insert failed",
+				logkey.Request, record.RequestID, logkey.Escrow, record.EscrowID, logkey.Nonce, record.WinnerNonce,
+				logkey.Model, record.Model, logkey.Outcome, string(record.Outcome), logkey.Error, err)
 		} else {
 			l.written.Add(1)
 		}

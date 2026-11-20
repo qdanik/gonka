@@ -125,7 +125,7 @@ The gateway is one process per set of escrows. It keeps its state in its own SQL
 
 `DEVSHARD_STORAGE_MODE` selects the control-plane store: unset or `sqlite` keeps `gateway.db` under `DEVSHARD_STORAGE_DIR`, `postgres` uses a database of its own, and any other value, `hybrid` and `auto` included, is refused at boot. Switching modes is an operator action: each store starts from its own data and nothing is copied between them.
 
-In `postgres` mode `GATEWAY_INSTANCE_ID` (a stable name for this process, written to the boot log) and `PGHOST` are required; the connection comes from the libpq `PG*` variables, with `PG_CONNECT_TIMEOUT`, `PG_OPERATION_TIMEOUT` and `PG_POOL_MAX_CONNS` as for the hosts.
+In `postgres` mode `GATEWAY_INSTANCE_ID` (a stable name for this process, written to the boot log) and `PGHOST` are required; the connection comes from the libpq `PG*` variables, with `PG_CONNECT_TIMEOUT`, `PG_OPERATION_TIMEOUT` and `PG_POOL_MAX_CONNS` as for the hosts. With several hosts in `PGHOST` the connect timeout per host is capped at `PG_OPERATION_TIMEOUT` divided by the number of hosts plus one, so a host that never answers leaves the next host and the statement room inside one operation; the cap counts one address per host name, and on a slow link raise `PG_OPERATION_TIMEOUT` so the first host can still finish connecting.
 
 Boot refuses, with no SQLite fallback:
 

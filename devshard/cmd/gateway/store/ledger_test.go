@@ -2,9 +2,14 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"devshard/logging"
 )
 
 const stallBound = 5 * time.Second
@@ -51,6 +56,55 @@ func TestRecordDoesNotBlockWhileTheWriterIsStalled(t *testing.T) {
 	}
 	if ledger.Stats().Dropped == 0 {
 		t.Fatal("Stats().Dropped after Close() = 0, want the shed rows still counted")
+	}
+}
+
+type capturedLogger struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (c *capturedLogger) Warn(msg string, keyvals ...any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.warns = append(c.warns, fmt.Sprint(append([]any{msg}, keyvals...)...))
+}
+
+func (c *capturedLogger) Info(string, ...any)  {}
+func (c *capturedLogger) Error(string, ...any) {}
+func (c *capturedLogger) Debug(string, ...any) {}
+
+// Test flow:
+//  1. Capture the log, make the backend refuse inserts and record two rows with different request ids.
+//  2. Close the ledger and assert the failed counter is 2.
+//  3. Assert exactly one warning per lost row, each naming its request id, escrow, model and the insert error.
+func TestEveryLostRowIsLoggedOnceWithItsIdentifiers(t *testing.T) {
+	captured := &capturedLogger{}
+	logging.SetLogger(captured)
+	t.Cleanup(func() { logging.SetLogger(logging.NewSlogAdapter()) })
+	backend := &fakeBackend{insertErr: errRefused}
+	ledger, err := New(backend).NewLedger(testRetention(), fixedClock())
+	if err != nil {
+		t.Fatalf("NewLedger() = %v, want nil", err)
+	}
+	ledger.Record(RequestRecord{RequestID: "request-1", EscrowID: "escrow-1", Model: "model-1", WinnerNonce: 7})
+	ledger.Record(RequestRecord{RequestID: "request-2", EscrowID: "escrow-2", Model: "model-2"})
+	if err := ledger.Close(); err != nil {
+		t.Fatalf("Close() = %v, want nil", err)
+	}
+	if got := ledger.Stats().Failed; got != 2 {
+		t.Fatalf("Stats().Failed = %d, want 2", got)
+	}
+	if len(captured.warns) != 2 {
+		t.Fatalf("warnings = %q, want one per lost row", captured.warns)
+	}
+	for index, want := range []string{"request-1", "escrow-1", "model-1", errRefused.Error()} {
+		if !strings.Contains(captured.warns[0], want) {
+			t.Errorf("warning %d = %q, want it to carry %q", index, captured.warns[0], want)
+		}
+	}
+	if !strings.Contains(captured.warns[1], "request-2") {
+		t.Errorf("second warning = %q, want it to carry request-2", captured.warns[1])
 	}
 }
 
