@@ -3,6 +3,7 @@ package peerload
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -273,5 +275,188 @@ func TestPollRoundsAgainstASilentPeerLeaveNoConnectionOrGoroutine(t *testing.T) 
 		if _, err := io.Copy(io.Discard, accepted); errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Fatalf("the poller kept its side of the connection open for %v", bound)
 		}
+	}
+}
+
+type connCount struct{ accepted, open atomic.Int64 }
+
+type countedConn struct {
+	net.Conn
+	once  sync.Once
+	count *connCount
+}
+
+func (c *countedConn) Close() error {
+	c.once.Do(func() { c.count.open.Add(-1) })
+	return c.Conn.Close()
+}
+
+type countedListener struct {
+	net.Listener
+	count *connCount
+}
+
+func (l countedListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.count.accepted.Add(1)
+	l.count.open.Add(1)
+	return &countedConn{Conn: conn, count: l.count}, nil
+}
+
+func listenCounted(t *testing.T) (countedListener, *connCount) {
+	t.Helper()
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := &connCount{}
+	return countedListener{Listener: listener, count: count}, count
+}
+
+func peerTLSConfig(peer transportIdentity) *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{peer.Certificate}, NextProtos: []string{http2Protocol}}
+}
+
+func serveStalledPeer(t *testing.T, listener net.Listener, peer transportIdentity) {
+	t.Helper()
+	var serving sync.WaitGroup
+	var mu sync.Mutex
+	var held []net.Conn
+	serving.Go(func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, conn)
+			mu.Unlock()
+			serving.Go(func() {
+				secured := tls.Server(conn, peerTLSConfig(peer))
+				if secured.Handshake() == nil {
+					_, _ = io.Copy(io.Discard, secured)
+				}
+				_ = secured.Close()
+			})
+		}
+	})
+	t.Cleanup(func() {
+		_ = listener.Close()
+		mu.Lock()
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+		mu.Unlock()
+		serving.Wait()
+	})
+}
+
+func linkToPeer(t *testing.T, listener net.Listener, peer transportIdentity, id PeerID, now func() time.Time) (*Plugin, *peerLink, *failureLog) {
+	t.Helper()
+	registry := newFakeRegistry()
+	plugin := newTestPlugin(t, registry, registry.registrar(firstAddress), now)
+	registry.put(secondAddress, registryEntry(id.Instance, peer, "https://"+listener.Addr().String()))
+	var dialer net.Dialer
+	plugin.poller.dial = dialer.DialContext
+	failures := &failureLog{}
+	plugin.poller.report = failures.report
+	plugin.ObserveChain([]string{secondAddress}, testHeight)
+	plugin.refreshRegistry(t.Context())
+	link := plugin.poller.links[id]
+	if link == nil {
+		t.Fatal("no link after the refresh")
+	}
+	t.Cleanup(plugin.poller.Close)
+	return plugin, link, failures
+}
+
+func waitForOpenConnections(t *testing.T, count *connCount, want int64) {
+	t.Helper()
+	const bound = 5 * time.Second
+	deadline := time.Now().Add(bound)
+	for count.open.Load() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("open connections = %d of %d accepted after %v, want %d", count.open.Load(), count.accepted.Load(), bound, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Test flow:
+//  1. Link to a peer that completes the TLS handshake and then never answers, and assert the link pings an idle connection and gives up on an unanswered ping at pollRequestTimeout.
+//  2. Shorten the request timeout and the ping timeouts, then poll enough rounds for the unfixed transport to dial past its stream limit.
+//  3. Assert every connection the poller opened is closed by the peer's side within a bound, so none stays open.
+func TestPollRoundsAgainstAPeerThatStallsAfterTheHandshakeLeaveNoOpenConnection(t *testing.T) {
+	const rounds = 300
+	t.Cleanup(leakcheck.VerifyNoneStarted(t))
+	listener, count := listenCounted(t)
+	id := PeerID{Address: secondAddress, Instance: "stalled"}
+	peer := newIdentity(t, id)
+	serveStalledPeer(t, listener, peer)
+	plugin, link, failures := linkToPeer(t, listener, peer, id, newFakeClock().now)
+	if link.transport.HTTP2 == nil || link.transport.HTTP2.SendPingTimeout != pollRequestTimeout || link.transport.HTTP2.PingTimeout != pollRequestTimeout {
+		t.Fatalf("HTTP2 = %+v, want SendPingTimeout and PingTimeout of %v", link.transport.HTTP2, pollRequestTimeout)
+	}
+	link.transport.HTTP2.SendPingTimeout = 50 * time.Millisecond
+	link.transport.HTTP2.PingTimeout = 50 * time.Millisecond
+	link.client.Timeout = 5 * time.Millisecond
+
+	for range rounds {
+		plugin.pollPeers(t.Context())
+	}
+
+	if len(failures.messages) != rounds {
+		t.Fatalf("reported failures = %d, want %d", len(failures.messages), rounds)
+	}
+	waitForOpenConnections(t, count, 0)
+}
+
+// Test flow:
+//  1. Link to a healthy peer that answers every poll with a fresh envelope over HTTP/2.
+//  2. Shorten the ping interval so idle pings go out between polls, and poll ten rounds with a pause in between.
+//  3. Assert every poll succeeded and the peer saw exactly one connection, still open.
+func TestPollRoundsAgainstAHealthyPeerReuseOneConnection(t *testing.T) {
+	const rounds = 10
+	t.Cleanup(leakcheck.VerifyNoneStarted(t))
+	listener, count := listenCounted(t)
+	id := PeerID{Address: secondAddress, Instance: "healthy"}
+	peer := newIdentity(t, id)
+	clock := newFakeClock()
+	var sequence atomic.Uint64
+	server := &http.Server{
+		ReadHeaderTimeout: pollRequestTimeout,
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write(peerEnvelope{Topic: loadTopicName, TopicVersion: loadTopicVersion, Origin: id.Address, Instance: id.Instance, Seq: sequence.Add(1), IssuedAtMS: clock.now().UnixMilli()}.marshal())
+		}),
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		_ = server.Serve(tls.NewListener(listener, peerTLSConfig(peer)))
+	}()
+	t.Cleanup(func() {
+		_ = server.Close()
+		<-served
+	})
+	plugin, link, failures := linkToPeer(t, listener, peer, id, clock.now)
+	link.transport.HTTP2.SendPingTimeout = 20 * time.Millisecond
+
+	for range rounds {
+		plugin.pollPeers(t.Context())
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	if len(failures.messages) != 0 {
+		t.Fatalf("reported failures = %v, want none", failures.messages)
+	}
+	if got := count.accepted.Load(); got != 1 {
+		t.Fatalf("connections accepted = %d, want 1", got)
+	}
+	if got := count.open.Load(); got != 1 {
+		t.Fatalf("connections open = %d, want 1", got)
 	}
 }
