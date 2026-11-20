@@ -5,12 +5,16 @@ import (
 	"strings"
 	"time"
 
+	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 	inferencetypes "github.com/productscience/inference/x/inference/types"
 
 	"devshard/signing"
 )
 
-const compactSignatureLength = 64
+const (
+	compactSignatureLength    = 64
+	executeContractMsgTypeURL = "/cosmwasm.wasm.v1.MsgExecuteContract"
+)
 
 // The escrow messages are marshalled by the chain's own generated types, so their wire layout tracks the chain by construction. See README.md, "How a message is encoded".
 func encodeMsgCreateDevshardEscrow(creator string, amount uint64, modelID string) ([]byte, error) {
@@ -60,8 +64,9 @@ func truncateSignature(sig []byte) ([]byte, error) {
 }
 
 const (
-	actionCreateEscrow = "create-escrow"
-	actionSettleEscrow = "settle-escrow"
+	actionCreateEscrow    = "create-escrow"
+	actionSettleEscrow    = "settle-escrow"
+	actionExecuteContract = "execute-contract"
 )
 
 type txSigning struct {
@@ -106,5 +111,12 @@ func buildCreateEscrowTx(parameters txSigning, amount uint64, modelID string) ([
 func buildSettleEscrowTx(parameters txSigning, settler string, input SettlementInput) ([]byte, error) {
 	return parameters.signMessage(actionSettleEscrow, settleEscrowMsgTypeURL, func() ([]byte, error) {
 		return encodeMsgSettleDevshardEscrow(settler, input)
+	})
+}
+
+func buildExecuteContractTx(parameters txSigning, contract string, execute []byte) ([]byte, error) {
+	return parameters.signMessage(actionExecuteContract, executeContractMsgTypeURL, func() ([]byte, error) {
+		message := &wasmtypes.MsgExecuteContract{Sender: parameters.signer.Address(), Contract: contract, Msg: execute}
+		return message.Marshal()
 	})
 }

@@ -82,7 +82,7 @@ Three resources move together: the nonce, the participant's concurrency slot, an
 
 ### 6. Boot and shutdown order is a contract
 
-Ten steps up (`app/lifecycle.go`, `bootOrder` and `startAll`) and thirteen down (`shutdownOrder` and `stopAll`), both listed in [operations.md](./operations.md) and both read back by a test, because an order nothing pins is a comment. Going up, the chain observer starts before anything that scores a host, the nonce ledger before the emitters that file facts into it, the replay of owed refusal votes before the escrow lifecycle that would settle their escrows, and the HTTP listener last, so the first request meets a gateway that is fully assembled; a step that fails stops the boot where it failed.
+Eleven steps up (`app/lifecycle.go`, `bootOrder` and `startAll`) and fourteen down (`shutdownOrder` and `stopAll`), both listed in [operations.md](./operations.md) and both read back by a test, because an order nothing pins is a comment. Going up, the chain observer starts before anything that scores a host, the nonce ledger before the emitters that file facts into it, the replay of owed refusal votes before the escrow lifecycle that would settle their escrows, and the HTTP listener last, so the first request meets a gateway that is fully assembled; a step that fails stops the boot where it failed.
 
 The order encodes five dependencies: races drain to the vote that settles their nonces, and that vote needs the escrow sessions, the observer and the chain client alive — so races stop second and everything they depend on stops below them. The store is second to last because closing it drains the accounting ledger. Chain connections close last because every step above can still reach the chain.
 

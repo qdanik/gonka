@@ -67,6 +67,7 @@ Each package has a `README.md` that states what the package owns, its contract w
 | [`liquidity/`](./liquidity/README.md) | one escrow's money by class — free, returning, late, stuck — and whether it is full, starved or idle |
 | [`funding/`](./funding/README.md) | one model's planned creates and retires from its money, demand, budget and rate |
 | [`chain/`](./chain/README.md) | all blockchain input and output, and the epoch phase snapshot |
+| [`peerload/`](./peerload/README.md) | the shadow channel between gateways: registry membership, mTLS, the load topic, the discount |
 | [`tokenizer/`](./tokenizer/README.md) | a prompt's tokens with the model's pinned `tokenizer.json`, for the boundary's context check |
 | [`limits/`](./limits/README.md) | admission, the per-host congestion windows, and the chain-weight capacity model |
 | [`perf/`](./perf/README.md) | per-host history, outlier ejection, capability refusal counts |

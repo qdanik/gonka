@@ -175,7 +175,13 @@ The families no question above needs, with the help text each one exports.
 | `devshard_gateway_participant_prefill_seconds_per_input_token` | Receipt-to-first-content time divided by input tokens, by participant and model. |
 | `devshard_gateway_participant_receipt_seconds` | Time from inference send until receipt confirmation by participant and model. |
 | `devshard_gateway_participant_total_attempt_seconds` | Total inference attempt time by participant and model. |
+| `devshard_gateway_peer_discount` | The escrow-score discount computed from peer load. Shadow value: no limit or score reads it. |
+| `devshard_gateway_peer_foreign_inflight` | Requests other gateways report in flight on this host, each address clamped to this gateway's own concurrency for it. |
+| `devshard_gateway_peer_handshakes_total` | Peer channel handshakes, by the verifier's result. |
+| `devshard_gateway_peer_last_seen_seconds` | Seconds since this peer instance's last accepted snapshot. |
 | `devshard_gateway_served_bindings_total` | Total served streams checked against the Finish their host signed, by verdict. |
+
+The four `devshard_gateway_peer_*` families exist only while the peer channel is on ([peerload.md](./peerload.md)). `result` on the handshake counter is `accepted`, counted per side once a connection is past its handshake and, on the listening side, inside its address's cap and, on the polling side, has answered, or the refusal: `self`, `identity`, `not_allowed`, `fingerprint` or `protocol`.
 
 ### Watching the funding planner
 

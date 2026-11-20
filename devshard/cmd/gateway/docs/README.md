@@ -29,4 +29,5 @@ This directory holds the documents that describe behaviour no single package own
 | [escrows.md](./escrows.md) | an escrow's life: creation, rotation, depletion, settlement, retirement |
 | [capacity.md](./capacity.md) | admission, the per-host congestion windows, outlier ejection, buffered replies |
 | [accounting.md](./accounting.md) | the nonce ledger: its vocabulary, its surface, every finding and its storage |
+| [peerload.md](./peerload.md) | the channel between gateways: membership, the mTLS check, the wire contract, the shadow discount |
 | [rules.md](./rules.md) | the invariants that must stay true, the non-goals and what the tests do not verify |
