@@ -6,6 +6,8 @@ const (
 	Request             = "request"
 	Escrow              = "escrow"
 	Nonce               = "nonce"
+	Nonces              = "nonces"
+	Unresolved          = "unresolved"
 	Model               = "model"
 	Host                = "host"
 	Hosts               = "hosts"

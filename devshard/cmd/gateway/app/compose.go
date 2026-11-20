@@ -246,7 +246,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	depletion := &depletionNotice{}
 	finishes := &finishNotice{}
 	escrows, router, prober, err := newRouting(routingDeps{
-		Sessions:     sources.Serving,
+		Sessions:     journaledSessions(sources.Serving, gatewayStore),
+		Completions:  gatewayStore,
 		ReadOnly:     sources.ReadOnly,
 		Capacity:     capacity,
 		Participants: participants,
@@ -368,6 +369,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		metrics.NewJournalCollector(journalCounts(events)),
 		metrics.NewNonceLedgerCollector(recorder.UnknownEscrowFacts),
 		metrics.NewFundingCollector(fundingModels(manager), deadlineCounts(manager)),
+		metrics.NewSettleCollector(manager.SettledUnresolvedNonces),
 	)
 
 	server, err := api.New(api.Deps{

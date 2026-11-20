@@ -44,6 +44,8 @@ Three mechanisms withhold work from a host, each on its own trigger, and each is
 
 One more line belongs to the same family, on the money side rather than the routing one: `execution timeouts swept` (`escrow/manager.go`), written by the escrow tick only when the sweep found nonces to re-vote, carrying how many were due, applied and failed. Silence means nothing was owed.
 
+A second money-side line, `escrow settled past unresolved nonces` (**Warn**, `escrow/settlement.go`), is written when a forced settle finalized while started nonces were still unresolved in the completion journal: the escrow, `unresolved` (how many) and `nonces` (which). Each of those nonces was paid to its executors without waiting for its execution timeout; the line is not written when none was unresolved, and an ordinary settle never writes it, because it defers instead ([operations.md](./operations.md), "The completion journal").
+
 ### The request record
 
 `request finished` (`journal/render_request.go`), one line per completed race: Info when it went out clean, Warn when it did not. It answers what a finished request can no longer be asked:
@@ -193,6 +195,7 @@ What to watch:
 | `devshard_gateway_planner_decisions_total{model,action,reason}` | creates and retires track demand; a steady stream of `capacity` creates with a flat `max_unsettled` is churn against the budget |
 | `devshard_gateway_planner_ignored_marks_total{model,reason}` | balance marks dropped by design; a rising `balance_floor` count is routing reporting what the planner already plans for |
 | `devshard_gateway_escrow_deadline_unsettled_total{model,reason}` | 0; any `deadline_passed` is money lost |
+| `devshard_gateway_escrow_settled_unresolved_nonces_total` | 0 while no forced settle meets a started nonce; a rise is nonces paid at settlement without their execution timeout, and `escrow settled past unresolved nonces` names them |
 
 ## Tracing
 
