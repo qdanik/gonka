@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgproto3"
-
 	"common/storage/pgtimeouts"
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 const (
@@ -34,9 +33,7 @@ func startTestServer(t *testing.T, serve func(net.Conn)) *testServer {
 		t.Fatalf("listening: %v", err)
 	}
 	server := &testServer{listener: listener}
-	server.wg.Add(1)
-	go func() {
-		defer server.wg.Done()
+	server.wg.Go(func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -45,13 +42,11 @@ func startTestServer(t *testing.T, serve func(net.Conn)) *testServer {
 			server.mu.Lock()
 			server.conns = append(server.conns, conn)
 			server.mu.Unlock()
-			server.wg.Add(1)
-			go func() {
-				defer server.wg.Done()
+			server.wg.Go(func() {
 				serve(conn)
-			}()
+			})
 		}
-	}()
+	})
 	t.Cleanup(func() {
 		listener.Close()
 		server.mu.Lock()
