@@ -219,7 +219,7 @@ An attempt that ends `empty_stream` or `burn_empty` says the classifier found no
 
 So the line carries both what the host said and what the gateway could not read, because one does not answer for the other.
 
-**What the host said** is already decoded by the classifier, which parses every event once: the line carries `finish_reason`, `usage_prompt_tokens` and `logprob_tokens` beside `usage_tokens` (`journal/render_race.go`, `appendEmptyAnswerFields`). Those four say whether the host thinks it produced anything at all, and a host reporting zero completion tokens has answered the question on its own.
+**What the host said** is already decoded by the classifier, which parses every event once: the line carries `finish_reason` and `logprob_tokens` for an empty answer (`journal/render_race.go`, `appendEmptyAnswerFields`), and `usage_prompt_tokens` beside `usage_tokens` for every attempt (`appendAttemptDeliveryFields`). Those four say whether the host thinks it produced anything at all, and a host reporting zero completion tokens has answered the question on its own.
 
 **What the gateway could not read** is the raw head of two chunks, kept while no chunk has classified as content (`engine/chunk_head.go`, `attemptState.keepChunkHeads`):
 

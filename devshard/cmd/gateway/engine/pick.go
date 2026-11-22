@@ -163,6 +163,7 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role AttemptRo
 	c.traceStep(RaceStep{
 		Kind: RaceStepNonceCommitted, RequestID: c.request.RequestID, EscrowID: assignment.Escrow, Nonce: nonce,
 		Participant: attempt.participant, Slot: attempt.hostIdx, Role: role, Reason: string(startReason),
+		InputBytes: c.request.InputBytes, MaxTokens: c.request.OutputTokens,
 	})
 
 	go runAttempt(attemptCtx, AttemptSpec{
