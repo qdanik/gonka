@@ -205,7 +205,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | how fast a host's history forgets |
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow, the most overdue first; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |
-| `DEVSHARD_POC_REQUEST_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them, and the funding planner creates nothing meanwhile; in `relaxed` the planner funds through a confirmation PoC and pauses only for an epoch PoC |
+| `DEVSHARD_POC_REQUEST_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them; in either mode the funding planner funds through a confirmation PoC and pauses only for an epoch PoC |
 | `GATEWAY_HEIGHT_SYNC_ENABLED` | true | whether the escrow's heartbeat cadence runs. Turn it off for a fleet whose hosts do not carry height sync, or every interval logs a heartbeat it could not stamp ([`docs/escrows.md`](escrows.md), "Height sync") |
 | `DEVSHARD_HEIGHTSYNC_HEARTBEAT` | false | whether a quiet escrow composes heartbeat turns; on only for true/1/on. A finished request's leftovers settle either way ([`docs/escrows.md`](escrows.md), "Height sync") |
 | `DEVSHARD_REQUIRE_HEIGHT_SEED` | true | whether a session chases a host-signed tip from the moment it opens and reports `seed_incomplete` when it cannot. It does not refuse requests — see [`docs/escrows.md`](escrows.md), "Height sync". Off in the e2e stand |
@@ -333,8 +333,8 @@ Always on, with no level knob — a trace that ships off by default is not there
 
 | Line | Carries |
 | --- | --- |
-| `nonce committed` (emitted by `engine/pick.go`, written by `journal/render_race.go`) | request, escrow, nonce, participant, slot, role, and why this attempt started |
-| `attempt finished` (emitted by `engine/report.go`, written by `journal/render_race.go`) | the same identity, the terminal verdict, whether the nonce was finished, whether the host diverged on state, and each deadline its host was narrowed for (`missed_receipt_deadline`, `missed_first_token_deadline`) |
+| `nonce committed` (emitted by `engine/pick.go`, written by `journal/render_race.go`) | request, escrow, nonce, participant, slot, role, why this attempt started, and the two sizes its reserve is made of: `input_bytes` (the body length the host checks as `input_length`) and `max_tokens`; the chain reserves `(input_bytes + max_tokens) × token_price + fee_per_nonce` for the nonce |
+| `attempt finished` (emitted by `engine/report.go`, written by `journal/render_race.go`) | the same identity, the terminal verdict, the host's `usage_tokens` and `usage_prompt_tokens` as its stream reported them (what the chain charges is `(prompt + completion) × token_price`, never more than the reserve), whether the nonce was finished, whether the host diverged on state, and each deadline its host was narrowed for (`missed_receipt_deadline`, `missed_first_token_deadline`) |
 | `served winner finish landed` (emitted by `engine/winner_sample.go`, written by `journal/render_race.go`) | request, escrow, nonce and participant of a winner whose nonce was still open when its stream ended, once its Finish is seen, with `finish_lag_ms` from the attempt's end ([race.md](./race.md), "A served winner's sample waits for its finish") |
 | `nonce stranded` (emitted by `engine/race.go`, written by `journal/render_race.go`) | **Warn** — a committed nonce nobody will answer for; the shape every recurring settlement defect takes |
 
@@ -369,6 +369,7 @@ One more line belongs to the same family, on the money side rather than the rout
 | --- | --- |
 | `api_key_id` | the client API key the request was made with: the first eight hex characters of the key's SHA-256 (`printf %s "$KEY" \| sha256sum \| cut -c1-8`), `admin` for the admin key, `none` when no configured client key matched (no key or an unknown one). The limiter's refusal line carries it too, so one key's share of the traffic and of the refusals can be read from the log |
 | `escrow` | the escrow the race ran on; absent when no escrow was picked |
+| `input_tokens` / `input_tokens_source` | the gateway's own prompt count and where it came from (`tokenizer_exact`, `tokenizer_sampled` or `bytes_estimate`), so a log answers whether the tokenizer counted a request |
 | `host` / `hosts` | `host` is the crowned attempt's host; with nobody crowned, `hosts` lists every host tried, comma-separated; a race that ran no attempt carries neither |
 | `bytes` | how much actually reached the client, counted at the socket — the strip rewrites events on the way out |
 | `terminated` | whether the SSE terminator went with them; without it a client waits out its own timeout on a reply it already has |

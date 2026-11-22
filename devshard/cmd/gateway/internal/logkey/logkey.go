@@ -102,6 +102,8 @@ const (
 	Stream            = "stream"
 	InputTokens       = "input_tokens"
 	InputTokensSource = "input_tokens_source"
+	InputBytes        = "input_bytes"
+	MaxTokens         = "max_tokens"
 	OutputTokens      = "output_tokens"
 	Bytes             = "bytes"
 	Terminated        = "terminated"
