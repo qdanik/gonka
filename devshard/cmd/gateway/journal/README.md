@@ -67,7 +67,7 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`app/l
 | Kind | Producer | Ledger | Line |
 | --- | --- | --- | --- |
 | `KindRaceReported` | `nonceAccountedRaces.RecordRace` (`app/observers.go`) | `RecordRace` | none |
-| `KindTimeoutVote` | `nonceAccountedRaces.RecordTimeout` for a race vote; `probeVotes.RecordTimeout` through `RecordProbeTimeout` for a warmup vote (`app/observers.go`) | `RecordTimeout` | `timeout vote failed`, Warn (`render_money.go`): a race vote whose action is `failed` for any reason but `escrow_gone_from_hosts`, which the escrow's own line already reports once. A warmup vote writes none; the warmup writes its own line |
+| `KindTimeoutVote` | `nonceAccountedRaces.RecordTimeout` for a race vote and, through `sweptTimeouts`, for a swept vote; `probeVotes.RecordTimeout` through `RecordProbeTimeout` for a warmup vote (`app/observers.go`) | `RecordTimeout` | `timeout vote cannot pass`, Info (`render_money.go`): a vote whose action is `skipped` for the reason `unvoteable`; `timeout vote failed`, Warn (`render_money.go`): a race or swept vote whose action is `failed` for any reason but `escrow_gone_from_hosts`, which the escrow's own line already reports once. A warmup vote writes none; the warmup writes its own line |
 | `KindNonceBurned` | `tracedDispatches.GhostBurned` (`app/observers.go`) | `RecordGhost` | `nonce burned for nobody`, Warn (`render_money.go`) |
 | `KindBurnBudgetExhausted` | `tracedDispatches.BurnBudgetExhausted` (`app/observers.go`) | none | `escrow stopped burning nonces at its budget`, Warn (`render_money.go`) |
 | `KindDiffComposed` | the diff observer `nonces.Recorder.watchDiffs` installs, through `DiffComposed`, under the session lock | `RecordDiffFacts` | none |
