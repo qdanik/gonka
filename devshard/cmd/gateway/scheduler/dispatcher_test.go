@@ -364,6 +364,7 @@ type harnessConfig struct {
 	windowFull          func(string) bool
 	cutOff              func(string) bool
 	maxConsecutiveBurns int64
+	maxBurnsPerRequest  int64
 	ejected             func(string) bool
 	stateBlocked        func(string) bool
 	unthrottled         func(string) bool
@@ -395,6 +396,7 @@ type harness struct {
 	limiter    *fakeLimiter
 	exhausted  *atomic.Pointer[string]
 	burnLimit  *atomic.Int64
+	burnCap    *atomic.Int64
 }
 
 func newHarness(t *testing.T, cfg harnessConfig) *harness {
@@ -425,33 +427,8 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	var exhausted atomic.Pointer[string]
 	burnLimit := &atomic.Int64{}
 	burnLimit.Store(cfg.maxConsecutiveBurns)
-
-	predicates := func(snapshot chain.PhaseSnapshot) availability {
-		return availability{
-			pocRequired: func(participant string) bool {
-				return snapshot.RequestsBlocked || (cfg.pocRequired != nil && cfg.pocRequired(participant))
-			},
-			congested: func(participant string) blockReason {
-				switch {
-				case cfg.cutOff != nil && cfg.cutOff(participant):
-					return blockCutOff
-				case cfg.windowFull != nil && cfg.windowFull(participant):
-					return blockWindowFull
-				}
-				return blockNone
-			},
-			ejected: func(participant string) bool {
-				return cfg.ejected != nil && cfg.ejected(participant)
-			},
-			stateBlocked: func(participant string) bool {
-				return cfg.stateBlocked != nil && cfg.stateBlocked(participant)
-			},
-			unthrottled: func(participant string) bool {
-				return cfg.unthrottled != nil && cfg.unthrottled(participant)
-			},
-			shadowed: cfg.shadowed,
-		}
-	}
+	burnCap := &atomic.Int64{}
+	burnCap.Store(cfg.maxBurnsPerRequest)
 
 	dispatcher := newDispatcher(dispatcherDeps{
 		escrowID:   escrowA,
@@ -459,7 +436,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		shadow:     cfg.prober,
 		session:    session,
 		snapshots:  snapshots,
-		predicates: predicates,
+		predicates: cfg.predicates,
 		acquireSlot: func(participant string, cost limits.TokenCost, overFullWindow bool) (func(), limits.Admission) {
 			if overFullWindow {
 				return limiter.Overdraft(participant, modelA, cost)
@@ -470,6 +447,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		now:                 clock.Now,
 		matchWait:           matchWaitWindow,
 		maxConsecutiveBurns: burnLimit.Load,
+		maxBurnsPerRequest:  burnCap.Load,
 		retirementReserve:   func() uint64 { return cfg.retirementReserve },
 		newTimer:            clock.newTimer,
 		submitBuffer:        cmp.Or(cfg.submitBuffer, int(config.Defaults().Scheduler.DispatchQueueDepth)),
@@ -490,6 +468,34 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		snapshots:  snapshots,
 		limiter:    limiter,
 		burnLimit:  burnLimit,
+		burnCap:    burnCap,
+	}
+}
+
+func (cfg harnessConfig) predicates(snapshot chain.PhaseSnapshot) availability {
+	return availability{
+		pocRequired: func(participant string) bool {
+			return snapshot.RequestsBlocked || (cfg.pocRequired != nil && cfg.pocRequired(participant))
+		},
+		congested: func(participant string) blockReason {
+			switch {
+			case cfg.cutOff != nil && cfg.cutOff(participant):
+				return blockCutOff
+			case cfg.windowFull != nil && cfg.windowFull(participant):
+				return blockWindowFull
+			}
+			return blockNone
+		},
+		ejected: func(participant string) bool {
+			return cfg.ejected != nil && cfg.ejected(participant)
+		},
+		stateBlocked: func(participant string) bool {
+			return cfg.stateBlocked != nil && cfg.stateBlocked(participant)
+		},
+		unthrottled: func(participant string) bool {
+			return cfg.unthrottled != nil && cfg.unthrottled(participant)
+		},
+		shadowed: cfg.shadowed,
 	}
 }
 

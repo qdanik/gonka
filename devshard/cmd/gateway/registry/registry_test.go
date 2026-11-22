@@ -132,10 +132,11 @@ func (f *fakeSession) SignatureStatus() ([]user.SignatureStatusEntry, uint64, bo
 	return nil, 0, false
 }
 
-func (f *fakeSession) SignedSlots() map[uint64]types.Bitmap128 { return nil }
-func (f *fakeSession) SnapshotState() types.EscrowState        { return f.escrowState }
-func (f *fakeSession) SealedInferences() int                   { return f.sealed }
-func (f *fakeSession) VoteThreshold() uint32                   { return f.escrowState.Config.VoteThreshold }
+func (f *fakeSession) SignedSlots() map[uint64]types.Bitmap128      { return nil }
+func (f *fakeSession) SnapshotState() types.EscrowState             { return f.escrowState }
+func (f *fakeSession) SnapshotStateNoInferences() types.EscrowState { return f.escrowState }
+func (f *fakeSession) SealedInferences() int                        { return f.sealed }
+func (f *fakeSession) VoteThreshold() uint32                        { return f.escrowState.Config.VoteThreshold }
 
 func (f *fakeSession) ProtocolVersion() string { return f.escrowState.StateRootAndProtocolVersion }
 
