@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/funding"
 	"devshard/cmd/gateway/liquidity"
@@ -323,10 +324,11 @@ func TestFiftyWakeupsInFifteenSecondsBuyAtMostTwo(t *testing.T) {
 }
 
 // Test flow:
-//  1. Boot with a guarantee of one and take every participant offline, so every attempt is refused and replaced on the same escrow until the race's attempt limit, one per host, stops it.
+//  1. Boot with a guarantee of one and take every participant offline, so every attempt is refused and replaced on the same escrow until the cap on started attempts per request, one per host, stops it.
 //  2. Send two 264-token requests at once, so their nonces interleave on the escrow's slots, and advance two minutes.
-//  3. Assert neither request was answered 200 and each started exactly four attempts on the seeded escrow, one on each of its hosts, so the reservations each race made are four attempts' worth; log the count against the two attempts a slot is priced for (`money identity` at every step).
+//  3. Assert neither request was answered 200 and each started exactly the capped number of attempts on the seeded escrow, one on each of that many distinct hosts, so the reservations each race made are that many attempts' worth; log the count against the two attempts a slot is priced for (`money identity` at every step).
 func TestRefusedAttemptsReplacedOnOneEscrowStayWithinItsHosts(t *testing.T) {
+	startedAttempts := int(config.Defaults().Engine.MaxStartedAttemptsPerRequest)
 	spec := plannerSpec()
 	spec.model.fullContextSlots = 1
 	spec.behaviours = everyParticipant(4, participantBehaviour{offline: true})
@@ -351,8 +353,8 @@ func TestRefusedAttemptsReplacedOnOneEscrowStayWithinItsHosts(t *testing.T) {
 				return fmt.Errorf("escrow %s: attempts of %d requests, want both requests' attempts", harness.seededIDs[0], len(executorsByRequest))
 			}
 			for _, executors := range executorsByRequest {
-				if len(executors) != 4 || slices.Max(slices.Collect(maps.Values(executors))) != 1 {
-					return fmt.Errorf("a request's attempts per executor slot = %v, want exactly one on each of the escrow's 4 hosts", executors)
+				if len(executors) != startedAttempts || slices.Max(slices.Collect(maps.Values(executors))) != 1 {
+					return fmt.Errorf("a request's attempts per executor slot = %v, want exactly one on each of %d hosts", executors, startedAttempts)
 				}
 			}
 			return nil

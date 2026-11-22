@@ -39,7 +39,7 @@ type hostTracker interface {
 // hostWindows is satisfied by *limits.ParticipantLimiter; neither Acquire nor a release is on it. See rules.md, "5. The slot and the escrow hold are taken with the nonce, and given back after the vote".
 type hostWindows interface {
 	OnResult(result limits.Result)
-	CountRefusalIfIdle(participant, model string)
+	CountRefusalIfIdle(participant, model string, launchedAt time.Time)
 }
 
 type raceMetrics interface {
@@ -193,6 +193,9 @@ func finishOnce(finished func()) func() {
 
 // OwedTimeoutVotes reports the votes taken and not yet posted. See race.md, "The timeout-vote queue".
 func (e *Engine) OwedTimeoutVotes() int64 { return e.settles.Owed() }
+
+// ResetLookupRefusals forgets every host's run of escrow-lookup refusals, as a restart does.
+func (e *Engine) ResetLookupRefusals() { e.lookups.reset() }
 
 // Stop returns once every race it admitted has posted its due votes and handed the rest on. See race.md, "Stop".
 func (e *Engine) Stop() {
@@ -365,6 +368,7 @@ func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegis
 				Verdict:     verdict,
 				Carried:     limits.TokenCost{Input: int64(outcome.InputTokens), Output: int64(outcome.OutputTokens)},
 				Pressure:    latencyPressure(e.deps.Perf, attempt.Participant, outcome.Model),
+				LaunchedAt:  attempt.LaunchedAt,
 			})
 		}
 	}

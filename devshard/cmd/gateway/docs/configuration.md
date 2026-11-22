@@ -57,6 +57,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ENGINE_INTER_CHUNK_STALL_MS` | 30 000 | silence after first content before an attempt is stalled |
 | `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |
 | `GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS` | 1 500 | lower bound on the slow-start hedge that starts a second attempt before the judged deadline; `0` turns it off |
+| `GATEWAY_ENGINE_MAX_STARTED_ATTEMPTS_PER_REQUEST` | 3 | attempts one request may start in all, hedges and retries included; past it no hedge or retry starts, and the request is answered overloaded when no attempt of it is alive; `0` never caps ([`routing.md`](routing.md), "The burn cap of a request") |
 | `GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES` | 64 | chain votes for unfinished nonces being posted at once, not a bound on settling escrows; one past it waits for a poster rather than being dropped |
 | `DEVSHARD_STATS_ENABLED` | false | the per-nonce ledger and its JSON API on `DEVSHARD_STATS_PORT` (9091), on every interface, with 10 s read, 60 s write and 120 s idle timeouts |
 | `DEVSHARD_STATS_SNAPSHOT_SECONDS` | 60 | how often the nonce ledger writes its snapshot to disk, and so the most a crash can roll it back; a value below 1 is ignored with a warning |
@@ -111,6 +112,7 @@ These are read the same way and rarely need changing. Where a knob has a longer 
 | `GATEWAY_MAX_INPUT_TOKENS_IN_FLIGHT` | 0 | the per-model budget of input tokens in flight, scaled by capacity, in tokenizer tokens for a request counted with the model's tokenizer and in byte-estimate tokens otherwise ([`request.md`](request.md), "The prompt token count"); `0` is unlimited |
 | `GATEWAY_MATCH_WAIT_MS` | 2 000 | how long a bound nonce waits for a compatible request before it is burned; `0` burns at once, and 5 000 is the most it accepts |
 | `GATEWAY_MAX_CONSECUTIVE_BURNS` | 2 | nonces one escrow may burn in a row before the next one is sent over a full congestion window; `0` never forces a send ([`routing.md`](routing.md), "The forced send") |
+| `GATEWAY_MAX_BURNS_PER_REQUEST` | 16 | nonces one request may burn across all its attempts; an escrow whose walk to a usable host costs more burns than the request has left is not picked, and past it the next binding burns nothing and sends nothing; the request is answered overloaded when no attempt of it is alive; `0` never caps ([`routing.md`](routing.md), "The burn cap of a request") |
 | `GATEWAY_DISPATCH_QUEUE_DEPTH` | 1 024 | waiters one escrow's dispatcher holds; past it an unpinned request walks to the next escrow, and when every escrow of the model is full it is refused busy (503); 1 to 65 536, read when an escrow's dispatcher starts |
 | `GATEWAY_FORCE_UPSTREAM_STREAMING` | true | whether a non-streaming request is still streamed from the host and assembled by the gateway ([`request.md`](request.md)) |
 | `GATEWAY_LOGPROBS_OPTIMIZATION_OVERRIDE` | unset | forces the hosts' logprobs optimization on or off for every inference; unset leaves each host on its own default (`DEVSHARD_LOGPROBS_OPTIMIZATION_ENABLED`, on). The admin override `logprobs_optimization` takes precedence, and removing it falls back to this value |
@@ -121,7 +123,7 @@ These are read the same way and rarely need changing. Where a knob has a longer 
 | `GATEWAY_CAPTURE_MAX_BYTES` | 1 GiB | what the capture directory may hold; nothing deletes capture files, so at the cap capture stops until the directory is emptied |
 | `GATEWAY_PERF_CONSECUTIVE_FAIL_THRESHOLD` | 5 | failures in a row that eject a host from routing ([`capacity.md`](capacity.md)) |
 | `GATEWAY_PERF_FAILURE_RATE_THRESHOLD` / `GATEWAY_PERF_FAILURE_RATE_MIN_VOLUME` | 0.15 / 20 | the failure rate that ejects a host, and the volume it must have seen before the rate counts |
-| `GATEWAY_PERF_EJECTION_BASE_SECONDS` / `GATEWAY_PERF_EJECTION_MAX_SECONDS` | 30 / 600 | how long an ejection lasts, the first time and at most |
+| `GATEWAY_PERF_EJECTION_BASE_SECONDS` / `GATEWAY_PERF_EJECTION_MAX_SECONDS` | 30 / 60 | how long an ejection lasts, the first time and at most; the maximum is at least the base and at least `host_cutoff_max_ms` |
 | `GATEWAY_PERF_MAX_EJECTION_FRACTION` / `GATEWAY_PERF_MIN_AVAILABLE_HOSTS` | 0.5 / 4 | the share of a model's hosts that may be ejected at once, and the number that always stays routable |
 | `GATEWAY_PERF_HOST_STALENESS_SECONDS` | 3 600 | how long an unseen host is remembered before its history and its participant-labelled metric series are dropped |
 
