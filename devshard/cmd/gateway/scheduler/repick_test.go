@@ -14,11 +14,16 @@ import (
 // busyEscrowHarness stands two escrows side by side with groups of their own, weighted so the first one wins the pick.
 func busyEscrowHarness(t *testing.T, busy, spare string) *schedulerHarness {
 	t.Helper()
+	return busyEscrowHarnessWithSpareSlots(t, busy, spare, spare+"-0", spare+"-1")
+}
+
+func busyEscrowHarnessWithSpareSlots(t *testing.T, busy, spare string, spareSlots ...string) *schedulerHarness {
+	t.Helper()
 	test := newSchedulerHarness(t, schedulerConfig{
 		escrows: []string{busy, spare},
 		slotsByEscrow: map[string][]string{
 			busy:  {busy + "-0", busy + "-1"},
-			spare: {spare + "-0", spare + "-1"},
+			spare: spareSlots,
 		},
 	})
 	test.weights.byEscrow[busy] = 1_000
@@ -46,17 +51,19 @@ func (h *schedulerHarness) reached(t *testing.T, escrowID string) bool {
 }
 
 // Test flow:
-//  1. Build a `busyEscrowHarness` where `escrowA` outweighs `escrowB`, then fill `escrowA`'s whole group.
+//  1. Build a harness where `escrowA` outweighs `escrowB`, `escrowB` has four hosts whose first two nonces land on blocked ones, then fill `escrowA`'s whole group so both walks cost two burns and the lighter `escrowA` is picked first.
 //  2. Pick an escrow for a request.
-//  3. Assert the assignment lands on `escrowB`'s second host at nonce 1.
+//  3. Assert the assignment lands on `escrowB`'s fourth host at nonce 3.
 //  4. Assert the pick reached `escrowA` first, and `escrowA`'s session advanced no nonces giving up.
 func TestARequestAnEscrowGivesUpOnIsOfferedToAnotherEscrow(t *testing.T) {
-	test := busyEscrowHarness(t, escrowA, escrowB)
+	test := busyEscrowHarnessWithSpareSlots(t, escrowA, escrowB, escrowB+"-0", escrowB+"-1", escrowB+"-2", escrowB+"-3")
 	test.busyGroup(t, escrowA)
+	test.limiter.block(escrowB + "-1")
+	test.limiter.block(escrowB + "-2")
 
 	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
 
-	wantHost(t, assignment, err, escrowB, escrowB+"-1", 1)
+	wantHost(t, assignment, err, escrowB, escrowB+"-3", 3)
 	if !test.reached(t, escrowA) {
 		t.Fatal("the pick never reached the busy escrow, so nothing was re-picked")
 	}
@@ -376,21 +383,14 @@ func TestAPinnedEscrowIsNeverRePicked(t *testing.T) {
 }
 
 // Test flow:
-//  1. Build a scheduler harness with `escrowA` outweighing `escrowB`, then block every host of `escrowA`'s group outright.
+//  1. Build a scheduler harness with `escrowA` outweighing `escrowB`, give `escrowB` four hosts whose first two nonces land on blocked ones, then block every host of `escrowA`'s group outright so both walks cost two burns and the lighter `escrowA` is picked first.
 //  2. Pick an escrow for a request.
 //  3. Assert the error is `ErrNoAvailableHost`.
 //  4. Assert `escrowB` advanced no nonces, since a state-blocked refusal is not a condition another escrow gets a re-pick for.
 func TestARefusalThatIsNotBusyIsAnsweredWhereItHappened(t *testing.T) {
-	test := newSchedulerHarness(t, schedulerConfig{
-		escrows: []string{escrowA, escrowB},
-		slotsByEscrow: map[string][]string{
-			escrowA: {escrowA + "-0", escrowA + "-1"},
-			escrowB: {escrowB + "-0", escrowB + "-1"},
-		},
-	})
-	test.weights.byEscrow[escrowA] = 1_000
-	test.weights.byEscrow[escrowB] = 10
-	test.loadEscrow(t, escrowB, 1)
+	test := busyEscrowHarnessWithSpareSlots(t, escrowA, escrowB, escrowB+"-0", escrowB+"-1", escrowB+"-2", escrowB+"-3")
+	test.limiter.block(escrowB + "-1")
+	test.limiter.block(escrowB + "-2")
 	for _, participant := range test.session(t, escrowA).slots {
 		test.scheduler.BlockHost(escrowA, participant)
 	}

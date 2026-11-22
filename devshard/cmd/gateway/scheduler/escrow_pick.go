@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -133,18 +134,29 @@ type rankedPick struct {
 	moneyDeclined      bool
 }
 
-type scoreTier struct {
-	bestScore float64
-	tied      []int
+type pickRank struct {
+	burns int
+	load  float64
 }
 
-func newScoreTier() scoreTier { return scoreTier{bestScore: math.Inf(1)} }
+func (rank pickRank) compare(other pickRank) int {
+	return cmp.Or(cmp.Compare(rank.burns, other.burns), cmp.Compare(rank.load, other.load))
+}
 
-func (tier *scoreTier) offer(index int, score float64) {
-	switch {
-	case score < tier.bestScore:
-		tier.bestScore, tier.tied = score, append(tier.tied[:0], index)
-	case score == tier.bestScore:
+type scoreTier struct {
+	best pickRank
+	tied []int
+}
+
+func newScoreTier() scoreTier {
+	return scoreTier{best: pickRank{burns: math.MaxInt, load: math.Inf(1)}}
+}
+
+func (tier *scoreTier) offer(index int, rank pickRank) {
+	switch order := rank.compare(tier.best); {
+	case order < 0:
+		tier.best, tier.tied = rank, append(tier.tied[:0], index)
+	case order == 0:
 		tier.tied = append(tier.tied, index)
 	}
 }
@@ -187,14 +199,14 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 			continue
 		}
 		forecast := expectedBurns(candidate, ranking.fleet.forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate)), ranking.queued, ranking.ahead[index])
-		score := (float64(candidate.ActiveUsers+forecast) + float64(ranking.ahead[index])) / weight
+		rank := pickRank{burns: forecast, load: (float64(candidate.ActiveUsers) + float64(ranking.ahead[index])) / weight}
 		switch {
 		case !reserveTier && !affordsAttempts(candidate, ranking.request, ranking.attempts):
-			thin.offer(index, score)
+			thin.offer(index, rank)
 		case !reserveTier && !affordsAttempts(candidate, ranking.retirement, ranking.attempts):
-			residue.offer(index, score)
+			residue.offer(index, rank)
 		default:
-			funded.offer(index, score)
+			funded.offer(index, rank)
 		}
 	}
 
@@ -275,7 +287,6 @@ func pinnedEscrowShort() error {
 	return fmt.Errorf("%w: %w: %w", ErrPinnedEscrowShort, ErrNoEscrowCapacity, types.ErrInsufficientBalance)
 }
 
-// expectedBurns is how many nonces this escrow spends on nobody before one binds to a host that can take this request. See routing.md, "Pricing an escrow by the burns it will cost".
 func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedAhead uint64) int {
 	if candidate.Session == nil {
 		return 0
@@ -285,12 +296,21 @@ func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedA
 		return 0
 	}
 	cursor := int((candidate.Session.LatestNonce() + 1 + queuedAhead) % uint64(len(slots)))
+	burns := 0
 	for step := range slots {
-		if gates.blocks(slots[(cursor+step)%len(slots)], queued) == blockNone {
-			return step
+		slot := slots[(cursor+step)%len(slots)]
+		if gates.shadowMember(slot) {
+			continue
+		}
+		reason := gates.blocks(slot, queued)
+		if reason == blockNone {
+			return burns
+		}
+		if reason.burns() {
+			burns++
 		}
 	}
-	return len(slots)
+	return burns
 }
 
 // unusableWeight holds for a weight no ratio can be taken against. See routing.md, "Picking an escrow".

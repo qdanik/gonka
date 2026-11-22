@@ -39,6 +39,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 	// Read before Advance: decide runs under the session's lock.
 	escalationBound := escalationNonceBound(snapshot.MaxNonce, groupSize)
 	burnLimit := d.maxConsecutiveBurns()
+	requestBurnCap := d.maxBurnsPerRequest()
 
 	var offered offer
 	decide := func(binding HostBinding) NonceIntent {
@@ -68,6 +69,12 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			offered.decision = d.shadowDecision()
 		default:
 			return intentFor(offered.decision)
+		}
+		if _, burning := offered.decision.(burn); burning {
+			if capped := d.cappedWaiter(binding.Participant, offered.refusedWaiter, requestBurnCap, avail); capped != nil {
+				offered.decision = overloaded{waiter: capped}
+				return NonceIntent{}
+			}
 		}
 		var held bool
 		if offered.taken.escrowHold, held = d.holdEscrow(); !held {
@@ -102,7 +109,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			d.failWaiting(ErrEscrowGone)
 			return time.Time{}, false
 		case errors.As(err, &spent):
-			d.burnSpentNonce(offered, spent)
+			d.burnSpentNonce(offered, spent, avail)
 			if d.spendBurnBudget(&burnBudget) {
 				return time.Time{}, false
 			}
@@ -131,6 +138,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			if prepared != nil {
 				burned.Nonce = prepared.Nonce()
 			}
+			d.chargeBurn(offered.refusedWaiter, offered.taken.participant, avail)
 			d.recordGhost(burned)
 			offered.taken.releaseHold()
 			d.burnsInARow++
@@ -143,6 +151,9 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			if d.spendBurnBudget(&burnBudget) {
 				return time.Time{}, false
 			}
+		case overloaded:
+			d.dequeue(outcome.waiter)
+			outcome.waiter.deliver(pickResult{err: fmt.Errorf("escrow %s: the request reached its cap of %d burned nonces: %w", d.escrowID, requestBurnCap, ErrRequestCapped)})
 		case hold:
 			d.recordHold()
 			return outcome.until, true
@@ -192,14 +203,17 @@ func (d *dispatcher) spendBurnBudget(budget *int) (tripped bool) {
 	return true
 }
 
-func (d *dispatcher) burnSpentNonce(offered offer, spent *SpentNonceError) {
+func (d *dispatcher) burnSpentNonce(offered offer, spent *SpentNonceError, avail availability) {
 	d.giveBack(offered.taken)
 	requestID := d.burnedDuring(offered.refusedWaiter)
+	charged := offered.refusedWaiter
 	if served, serving := offered.decision.(serve); serving {
 		requestID = served.waiter.profile.RequestID
+		charged = served.waiter
 		d.dequeue(served.waiter)
 		served.waiter.deliver(pickResult{err: fmt.Errorf("escrow %s: %w", d.escrowID, spent)})
 	}
+	d.chargeBurn(charged, offered.taken.participant, avail)
 	d.recordGhost(Burn{Nonce: spent.Nonce, Participant: offered.taken.participant, Reason: ghostPrepareFailed.reason(), RequestID: requestID})
 }
 
@@ -229,17 +243,42 @@ func (d *dispatcher) dropAbandoned() {
 	d.keepWaiting(func(queued *waiter) bool { return !queued.abandoned.Load() })
 }
 
-// burnedDuring names the waiter a refused slot was meant for, else the oldest waiter still waiting. See README, "The boundary types".
-func (d *dispatcher) burnedDuring(refusedWaiter *waiter) string {
+func (d *dispatcher) burnedWaiter(refusedWaiter *waiter) *waiter {
 	if refusedWaiter != nil {
-		return refusedWaiter.profile.RequestID
+		return refusedWaiter
 	}
 	for _, queued := range d.waiting {
 		if !queued.abandoned.Load() {
-			return queued.profile.RequestID
+			return queued
 		}
 	}
+	return nil
+}
+
+func (d *dispatcher) burnedDuring(refusedWaiter *waiter) string {
+	if charged := d.burnedWaiter(refusedWaiter); charged != nil {
+		return charged.profile.RequestID
+	}
 	return ""
+}
+
+func (d *dispatcher) chargeBurn(refusedWaiter *waiter, participant string, gates availability) {
+	if gates.shadowMember(participant) {
+		return
+	}
+	if charged := d.burnedWaiter(refusedWaiter); charged != nil {
+		charged.profile.Burns.Charge()
+	}
+}
+
+func (d *dispatcher) cappedWaiter(participant string, refusedWaiter *waiter, limit int64, gates availability) *waiter {
+	if gates.shadowMember(participant) {
+		return nil
+	}
+	if charged := d.burnedWaiter(refusedWaiter); charged != nil && charged.profile.Burns.Reached(limit) {
+		return charged
+	}
+	return nil
 }
 
 // keepWaiting compacts the queue, clearing the tail so a departed waiter is not held by the array.
