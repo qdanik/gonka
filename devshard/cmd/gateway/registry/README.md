@@ -35,6 +35,10 @@ The execution-timeout sweep takes the same kind of hold through `holdForSweep`, 
 
 `Add` publishes serving and `AddReserve` publishes a reserve, two exported entry points over one unexported `add(ctx, escrowID, model, entryFlags)`. `ReserveTaken` clears the reserve flag with a compare-and-swap, so however many picks race for a reserve the manager is told once (`registry.go`, `ReserveTaken`; see [routing.md](../docs/routing.md), "A reserve escrow").
 
+## The execution-timeout sweep
+
+`sweepDue` votes the started records past their deadline, with the memory in `sweep_memory.go` that the shared `user.SweepExecutionTimeouts` lacks: a nonce `quorum.Voteable` rejects is skipped and named once, a nonce whose vote failed waits 1, 2, 4 ... sweeps of its escrow up to 128, and a never-voted nonce comes before a retry. The memory is per session handle and in process, so a restart tries every voteable nonce once more, and the handle's finalize lock keeps two sweeps of one escrow apart. `Registry.SweepExecutionTimeouts` gives an escrow at most half the tick's budget, then hands what is left to the escrows that used their half. `SweepBeforeFinalize` runs the same loop with no race grace and no back-off, since it is the last vote before the record is paid in full; it still skips what no round can apply. See ../docs/race.md, "The swept vote and the retried vote".
+
 ## Reading an escrow's open records
 
 `OpenRecords(escrowID)` returns the session config and every record still `Pending`, `Started` or `Challenged`, and `false` for an escrow not published. `LiveInferences` copies every unsealed record, about 1 ms per escrow at ten thousand of them, so a session that also offers the live id set and the applied nonce (`OpenRecordReader`, which `sessionHandle` satisfies over the state machine's existing `Config`, `LatestNonce`, `LiveInferenceIDs` and `GetInference`; every session has `Inference`, so the other three are what select the index) is read through a per-escrow index on `escrowEntry.openRecords`; any other session falls back to filtering `LiveInferences`.

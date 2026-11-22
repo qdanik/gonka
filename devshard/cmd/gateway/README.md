@@ -23,6 +23,7 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`scheduler/`](./scheduler/) | which escrow, which host, which nonce — and burning the nonces nobody can serve |
 | [`engine/`](./engine/) | the speculative race: attempts, escalation, crowning, streaming, and the votes the losers owe |
 | [`registry/`](./registry/) | the live escrow set and the sessions that dispatch on it |
+| [`quorum/`](./quorum/) | which timeout votes can pass: the arithmetic the vote queue and the sweep share |
 | [`escrow/`](./escrow/) | escrow creation, rotation, depletion, settlement, retirement, crash recovery |
 | [`liquidity/`](./liquidity/) | one escrow's money by class — free, returning, late, stuck — and whether it is full, starved or idle |
 | [`funding/`](./funding/) | one model's planned creates and retires from its money, demand, budget and rate |

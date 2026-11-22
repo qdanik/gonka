@@ -248,6 +248,10 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	hosts.SetNarrator(events)
 	recorder.SetCapability(hostCapabilities(hosts, participants, capacity))
 
+	raceRecorder := metrics.NewRaceRecorder(telemetry, clock, func() time.Duration {
+		return time.Duration(configHolder.Load().Perf.HostStalenessSeconds) * time.Second
+	})
+	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
 	finishes := &finishNotice{}
@@ -268,6 +272,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		PeerRPC:      adoption,
 		Ledger:       recorder,
 		Journal:      events,
+		Timeouts:     raceObserver,
 		Shadow:       shadowProbes,
 		Now:          clock,
 	})
@@ -277,10 +282,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	retention := newSessionRetention(storageDir, configuration.Server.SessionRetentionEpochs, gatewayStore, escrows)
 	observer.Subscribe(func(snapshot chain.PhaseSnapshot) { retention.observe(ctx, snapshot) })
 	observer.Subscribe(func(snapshot chain.PhaseSnapshot) { escrows.ShareChainMaxNonce(snapshot.MaxNonce) })
-	hostStaleness := func() time.Duration {
-		return time.Duration(configHolder.Load().Perf.HostStalenessSeconds) * time.Second
-	}
-	raceRecorder := metrics.NewRaceRecorder(telemetry, clock, hostStaleness)
 	exhaustion := escrowExhaustion{escrows: escrows, router: router}
 	manager, err := escrow.NewManager(escrow.Deps{
 		Tx:          txClient,
@@ -327,7 +328,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 
 	sessions := api.NewSessions(escrows)
-	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
 	probeTimeouts := probeVotes{recorder: raceRecorder, events: events}
 	prober.Settle(sessions.Poster, probeTimeouts, events)
 	prompts := promptTokens(sources.ModelSnapshots, observer)
