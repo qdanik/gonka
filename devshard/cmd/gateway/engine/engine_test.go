@@ -19,7 +19,6 @@ import (
 
 var errVoteCause = errors.New("collect timeout votes")
 
-// scriptedTimeoutHandler reproduces Session.HandleTimeout's four returns verbatim.
 type scriptedTimeoutHandler struct {
 	result    user.TimeoutResult
 	err       error
@@ -35,20 +34,16 @@ func (h *scriptedTimeoutHandler) TimeoutDeadline(uint64, time.Time) (string, tim
 func (h *scriptedTimeoutHandler) FinishTxFor(uint64) []byte { return h.finishTx }
 
 func (h *scriptedTimeoutHandler) WaitTimeoutDeadline(context.Context, uint64, time.Time) (types.TimeoutReason, bool, user.TimeoutResult, error) {
-	return types.TimeoutReason_TIMEOUT_REASON_UNSPECIFIED, false, h.result, h.err
+	return types.TimeoutReason_TIMEOUT_REASON_EXECUTION, true, user.TimeoutResult{}, nil
 }
 
 func (h *scriptedTimeoutHandler) VoteTimeout(context.Context, uint64, time.Time, *host.InferencePayload, types.TimeoutReason) (user.TimeoutResult, bool, error) {
+	h.calls++
 	return h.result, false, h.err
 }
 
 func (h *scriptedTimeoutHandler) HandleErrorMiss(context.Context, uint64, []byte, []byte) (user.TimeoutResult, error) {
 	h.missCalls++
-	return h.result, h.err
-}
-
-func (h *scriptedTimeoutHandler) HandleTimeout(context.Context, uint64, time.Time, *host.InferencePayload) (user.TimeoutResult, error) {
-	h.calls++
 	return h.result, h.err
 }
 
