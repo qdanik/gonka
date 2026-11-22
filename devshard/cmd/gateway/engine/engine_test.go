@@ -712,3 +712,31 @@ func TestRecordStopsExcusingAHostThatOnlyRefusesLookups(t *testing.T) {
 		t.Fatalf("input window after one refusal past the trusted run = %v, want below %v: it is judged as a throttle", judged, trusted)
 	}
 }
+
+// Test flow:
+//  1. Build two limiters on a clock fixed at `testEpoch`, reset both, and an engine over each reporting first-content pressure for the host.
+//  2. Record a clean outcome whose attempt was launched a minute before the reset on the first engine, and one launched at the reset on the second.
+//  3. Assert the first limiter tracks no host at all, since the engine hands the attempt's launch time to the limiter, and the second one narrowed its input window.
+func TestRecordHandsTheLaunchTimeToTheWindows(t *testing.T) {
+	launchedBefore := cleanAttempt()
+	launchedBefore.LaunchedAt = testEpoch.Add(-time.Minute)
+	launchedAfter := cleanAttempt()
+	launchedAfter.LaunchedAt = testEpoch
+	var limiters [2]*limits.ParticipantLimiter
+	for index, attempt := range []AttemptOutcome{launchedBefore, launchedAfter} {
+		limiters[index] = limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
+		limiters[index].ResetAll()
+		hosts := trackedHosts()
+		hosts.pressure = perf.Pressure{FirstContent: 2}
+		races := engineRecordingInto(t, limiters[index], hosts)
+
+		races.record(race(attempt), nil, races.admit())
+	}
+
+	if tracked := limiters[0].Snapshot(); len(tracked) != 0 {
+		t.Errorf("limiter tracks %d pairs after an attempt launched before the reset, want none", len(tracked))
+	}
+	if input, _ := trackedWindows(t, limiters[1]); input >= probeStartingWindow {
+		t.Errorf("input window after an attempt launched at the reset = %v, want it narrowed below %v", input, float64(probeStartingWindow))
+	}
+}

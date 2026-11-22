@@ -19,7 +19,7 @@ func renderBurn(lines logSink, escrowID string, burned scheduler.Burn) {
 		fields = append(fields, logkey.Nonce, burned.Nonce)
 	}
 	fields = append(fields, logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
-	if burned.RequestID != "" {
+	if burned.RequestID != scheduler.NoRequestID {
 		fields = append(fields, logkey.BurnedDuringRequest, burned.RequestID)
 	}
 	lines.Warn("nonce burned for nobody", fields...)
