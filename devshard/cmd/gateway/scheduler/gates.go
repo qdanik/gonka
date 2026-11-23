@@ -18,7 +18,7 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 // fleetGates is the part of the ladder that depends on the model alone. See routing.md, "Pricing an escrow by the burns it will cost".
 func (s *Scheduler) fleetGates(model string, snapshot chain.PhaseSnapshot) availability {
 	preserved := pocPreserved(snapshot, model)
-	allowlist, unthrottled := s.participantAllowlist(), s.unthrottledParticipants()
+	allowlist, unthrottled := s.participantAllowlist(model), s.unthrottledParticipants(model)
 	return availability{
 		notAllowed:  refusedByAllowlist(allowlist, unthrottled),
 		unthrottled: waivesThrottling(unthrottled),

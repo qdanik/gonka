@@ -41,6 +41,7 @@ const (
 
 	ParticipantAllowlist    = "participant_allowlist"
 	UnthrottledParticipants = "unthrottled_participants"
+	ParticipantsByModel     = "participants_by_model"
 )
 
 const (

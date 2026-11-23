@@ -63,6 +63,31 @@ func filterOptions(configuration *config.Config, admin bool, stopTokenVocabulary
 	}
 }
 
+type participantLists struct {
+	Allowlist   []string `json:"allowlist"`
+	Unthrottled []string `json:"unthrottled"`
+}
+
+type participantsInForce struct {
+	Network participantLists            `json:"network"`
+	Models  map[string]participantLists `json:"models"`
+}
+
+func participantViews(configuration *config.Config) participantsInForce {
+	view := participantsInForce{Network: listsOf(configuration), Models: map[string]participantLists{}}
+	for _, model := range configuration.ModelNames() {
+		view.Models[model] = listsOf(configuration.For(model))
+	}
+	return view
+}
+
+func listsOf(configuration *config.Config) participantLists {
+	return participantLists{
+		Allowlist:   append([]string{}, configuration.Scheduler.ParticipantAllowlist...),
+		Unthrottled: append([]string{}, configuration.Scheduler.UnthrottledParticipants...),
+	}
+}
+
 func modelTokenLimits(configuration *config.Config) func(string) (uint64, uint64) {
 	if !configuration.HasModels() {
 		return nil

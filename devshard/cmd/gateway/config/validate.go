@@ -368,12 +368,12 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
 		if problem := participantEntryProblem(participant); problem != "" {
-			complain("scheduler_participant_allowlist[%d]: %s", index, problem)
+			complain("participant_allowlist[%d]: %s", index, problem)
 		}
 	}
 	for index, participant := range c.Scheduler.UnthrottledParticipants {
 		if problem := participantEntryProblem(participant); problem != "" {
-			complain("scheduler_unthrottled_participants[%d]: %s", index, problem)
+			complain("unthrottled_participants[%d]: %s", index, problem)
 		}
 	}
 }

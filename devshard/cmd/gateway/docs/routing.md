@@ -270,7 +270,7 @@ The forced send bounds a run of burns on one escrow and crosses only a full wind
 
 ### Unthrottled participants
 
-`scheduler_unthrottled_participants` names the hosts whose quality-of-service gates this gateway declines to apply. When a nonce binds to one of them, a full congestion window and an outlier ejection stop being blocks, the slot is taken as an overdraft rather than a fitted acquire, and the nonce is therefore not burned for either reason. The list also admits its members whether or not the allowlist names them, because refusing a host this gateway was told to always serve would be two settings contradicting each other rather than one narrowing (`allowlist.go`, `admittedParticipants`).
+`unthrottled_participants` names the hosts whose quality-of-service gates this gateway declines to apply. When a nonce binds to one of them, a full congestion window and an outlier ejection stop being blocks, the slot is taken as an overdraft rather than a fitted acquire, and the nonce is therefore not burned for either reason. The list also admits its members whether or not the allowlist names them, because refusing a host this gateway was told to always serve would be two settings contradicting each other rather than one narrowing (`allowlist.go`, `admittedParticipants`). Both lists are read for the request's model, so a model's own `participant_allowlist` and `unthrottled_participants` under `models.<id>` replace the network lists for that model.
 
 **It does not make the cursor land on those hosts more often.** Nothing can: the slot layout is sampled by the chain, weight-proportionally and deterministically per escrow id, and `hostIdx = nonce % groupSize`. The list changes what happens when a nonce arrives at a host, never how often it arrives.
 
