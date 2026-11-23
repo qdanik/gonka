@@ -39,7 +39,7 @@ The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting 
 
 ### Who may call what
 
-`api/routes.go`, `authorizeModel`. Three tiers per model, from `limits.model_access`, which the admin override `model_access` sets:
+`api/routes.go`, `authorizeModel`. Three tiers per model, from `access` under `models.<id>` (or the network `access` for a model with no block of its own):
 
 | Tier | Who |
 | --- | --- |
@@ -49,12 +49,12 @@ The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting 
 
 **Two behaviours to know before editing it:**
 
-- A model **not listed** in `model_access` is `admin_only`, an empty map included. A deployment starts with no entries, so until the operator names a model `open` or `api_key` only the admin reaches it, and setting `DEVSHARD_API_KEYS` alone opens nothing. While any model is `open` the gateway logs a warning naming it, at startup and after every admin override, since an open model spends the operator's escrows for any caller.
-- With `DEVSHARD_ADMIN_API_KEY` unset the whole admin surface answers **404, not 401** — the routes do not exist rather than rejecting the caller. A "route not found" on `/v1/admin/…` usually means the key is missing, not the path. Without it no one can set `model_access` either, so every model stays admin-only and the gateway serves no client.
+- A model with no `access` of its own and no network `access` is `admin_only`. A deployment starts with no entries, so until the operator names a model `open` or `api_key` only the admin reaches it, and setting `DEVSHARD_API_KEYS` alone opens nothing. While any model is `open` the gateway logs a warning naming it, at startup and after every admin override, since an open model spends the operator's escrows for any caller.
+- With `DEVSHARD_ADMIN_API_KEY` unset the whole admin surface answers **404, not 401** — the routes do not exist rather than rejecting the caller. A "route not found" on `/v1/admin/…` usually means the key is missing, not the path. Without it no one can set `access` either, so every model stays admin-only and the gateway serves no client.
 
-An admin key satisfies every tier, so admin calls never need a second key. A `PUT` of the settings replaces the whole override set, so a `PUT` that leaves out `model_access` closes every model to clients again; a `POST` changes only the fields it names ([configuration.md](./configuration.md), "The three layers").
+An admin key satisfies every tier, so admin calls never need a second key. A `PUT` of the settings replaces the whole override set, so a `PUT` that leaves out `models` drops every model's admin block, and a model with no `access` of its own is then reachable only as the network `access` and `GATEWAY_MODELS_JSON` allow; a `POST` changes only the fields it names ([configuration.md](./configuration.md), "The three layers").
 
-`limits.model_access`, together with `limits.model_limits`, is also the list of models the gateway offers (`config.Limits.Offers`): a model named in either one answers 503 when nothing currently routes to it, and a model named in neither answers 400 while any model is routable — an empty registry answers 503 for every model instead.
+The `models` setting is also the list of models the gateway offers (`config.Config.Offers`): a model named in it answers 503 when nothing currently routes to it, and a model named in it nowhere answers 400 while any model is routable — an empty registry answers 503 for every model instead.
 
 ### The kill switch
 

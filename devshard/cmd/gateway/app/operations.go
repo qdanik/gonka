@@ -307,6 +307,9 @@ func (o *operations) Reconfigure(ctx context.Context, overrides config.Overrides
 	if err != nil {
 		return err
 	}
+	if err := next.CheckStoredModels(); err != nil {
+		return err
+	}
 	if err := o.store.SaveOverrides(ctx, overrides); err != nil {
 		return err
 	}

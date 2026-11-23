@@ -18,7 +18,7 @@ export ADMIN_KEY=<the value of DEVSHARD_ADMIN_API_KEY>
 | every request 429 | `limiter_queue_depth` and `effective_max_concurrent_requests` — the weight model may have scaled capacity to almost nothing after an epoch switch |
 | every request 503 with no model listed | the chain snapshot is stale, or the escrow set is empty — check `chain_snapshot_healthy` and `/v1/admin/devshards` |
 | 503 on a healthy-looking gateway | `buffered_response_bytes` at the ceiling: non-streaming replies are holding the whole budget |
-| a model returns 401 to every caller but the admin | no `model_access` entry names it — set it through the `model_access` override |
+| a model returns 401 to every caller but the admin | neither the model nor the network names an `access` for it — set `access` under `models.<id>` |
 | the admin surface 404s | `DEVSHARD_ADMIN_API_KEY` is unset |
 | burns climbing | `ghost_nonces_burned_total` by reason — see [accounting.md](./accounting.md) |
 | prompts past a model's context reach hosts | the log line `prompt tokenizer could not be loaded`, `prompt tokenizer pin could not be read`, `model has no tokenizer the gateway reads` or `prompt tokenizer parse panicked` for the model, or no context length for it — see [operations.md](./operations.md), "The context check" |

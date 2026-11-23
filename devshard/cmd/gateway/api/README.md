@@ -71,7 +71,7 @@ Each `route` is one registered pattern. An empty label means the route is not in
 
 `handleDevshardChat` pins the race to one escrow, and refuses a pin the gateway no longer routes to as an unknown devshard (`ErrUnknownDevshard`, 404).
 
-`routableModel` refuses an unroutable model before it can take a limiter slot or an input-token budget, and fails closed on an empty registry. A model the operator offers — named in `limits.model_access` or `limits.model_limits`, via `config.Limits.Offers` — answers the same `ModelUnavailableError` as an empty registry when nothing currently routes to it; a model nobody offers answers `UnsupportedModelError` instead.
+`routableModel` refuses an unroutable model before it can take a limiter slot or an input-token budget, and fails closed on an empty registry. A model the operator offers — named in `models`, via `config.Config.Offers` — answers the same `ModelUnavailableError` as an empty registry when nothing currently routes to it; a model nobody offers answers `UnsupportedModelError` instead.
 
 ## What the boundary hands the engine
 

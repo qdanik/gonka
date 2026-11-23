@@ -2,7 +2,6 @@ package config
 
 import (
 	"cmp"
-	"maps"
 	"slices"
 	"strings"
 
@@ -94,14 +93,12 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.HostCutoff.AfterFailures, overrides.HostCutoffAfterFailures)
 	overrideIfSet(&configuration.Limits.HostCutoff.BaseMS, overrides.HostCutoffMS)
 	overrideIfSet(&configuration.Limits.HostCutoff.MaxMS, overrides.HostCutoffMaxMS)
-	if overrides.ModelLimits != nil {
-		configuration.Limits.ModelLimits = maps.Clone(overrides.ModelLimits)
-	}
-	if overrides.ModelAccess != nil {
-		configuration.Limits.ModelAccess = maps.Clone(overrides.ModelAccess)
-	}
+	overrideIfSet(&configuration.Limits.Access, overrides.Access)
 
 	if err := configuration.Validate(); err != nil {
+		return nil, err
+	}
+	if err := resolveModels(&configuration, values.ModelsJSON, overrides.Models); err != nil {
 		return nil, err
 	}
 	return &configuration, nil
@@ -153,7 +150,9 @@ func applyTunables(configuration *Config, tunables env.Tunables) {
 	overrideIfSet(&configuration.Engine.LoserGraceMS, tunables.EngineLoserGraceMS)
 	overrideIfSet(&configuration.Engine.MaxConcurrentTimeoutVotes, tunables.EngineMaxConcurrentTimeoutVotes)
 	overrideIfSet(&configuration.Engine.HedgeFirstTokenFloorMS, tunables.EngineHedgeFirstTokenFloorMS)
+	overrideIfSet(&configuration.Engine.MaxAttemptsPerRequest, tunables.EngineMaxAttemptsPerRequest)
 	overrideIfSet(&configuration.Engine.MaxStartedAttemptsPerRequest, tunables.EngineMaxStartedAttemptsPerRequest)
+	overrideIfSet(&configuration.Stream.DrainTimeoutSeconds, tunables.DrainTimeoutSeconds)
 	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, tunables.PerfEWMAHalfLifeSeconds)
 	overrideIfSet(&configuration.Perf.ConsecutiveFailThreshold, tunables.PerfConsecutiveFailThreshold)
 	overrideIfSet(&configuration.Perf.FailureRateThreshold, tunables.PerfFailureRateThreshold)

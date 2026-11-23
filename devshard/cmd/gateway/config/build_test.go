@@ -83,28 +83,27 @@ func TestBuildRejectsInvalidMergedConfig(t *testing.T) {
 }
 
 // Test flow:
-//  1. Build a config from an override whose `ModelLimits` map has one entry.
-//  2. Mutate the source map's existing entry and add a new one.
-//  3. Assert the built config's model limits are unaffected by either mutation, since `Build` clones the map rather than aliasing it.
-func TestBuildClonesOverridesModelLimits(t *testing.T) {
-	sourceModelLimits := map[string]ModelLimits{
-		"model-a": {DefaultMaxTokens: 100, MaxTokensCap: 200},
-	}
-	overrides := Overrides{ModelLimits: sourceModelLimits}
+//  1. Build a config from an override whose `models` map has one entry that pins max_model_len.
+//  2. Mutate the source map's entry, the pinned value behind its pointer, and add a new model.
+//  3. Assert the built config's per-model settings are unaffected by any of these, since `Build` copies what it resolves rather than aliasing it.
+func TestBuildCopiesOverridesModels(t *testing.T) {
+	pinned := int64(100)
+	source := map[string]ModelSettings{"model-a": {MaxModelLen: &pinned}}
 
-	configuration, err := Build(env.Values{}, overrides)
+	configuration, err := Build(env.Values{}, Overrides{Models: source})
 	if err != nil {
 		t.Fatalf("Build(): %v", err)
 	}
 
-	sourceModelLimits["model-a"] = ModelLimits{DefaultMaxTokens: 999, MaxTokensCap: 999}
-	sourceModelLimits["model-b"] = ModelLimits{DefaultMaxTokens: 1, MaxTokensCap: 2}
+	pinned = 999
+	source["model-a"] = ModelSettings{}
+	source["model-b"] = ModelSettings{}
 
-	if got := configuration.Limits.ModelLimits["model-a"].DefaultMaxTokens; got != 100 {
-		t.Fatalf("Limits.ModelLimits[model-a].DefaultMaxTokens = %d, want untouched 100 after mutating the source map (map was aliased, not cloned)", got)
+	if got := configuration.For("model-a").Limits.MaxModelLen; got == nil || *got != 100 {
+		t.Fatalf("For(model-a).Limits.MaxModelLen = %v, want untouched 100 after mutating the source (it was aliased, not copied)", got)
 	}
-	if _, present := configuration.Limits.ModelLimits["model-b"]; present {
-		t.Fatal("Limits.ModelLimits gained a key added to the source map after Build — map was aliased, not cloned")
+	if configuration.Offers("model-b") {
+		t.Fatal("the built config gained a model added to the source map after Build: the map was aliased")
 	}
 }
 
@@ -243,7 +242,7 @@ func TestThePerRequestBurnCapIsReachableWithoutARedeploy(t *testing.T) {
 				t.Fatalf("Build(): %v", err)
 			}
 			if got := configuration.Scheduler.MaxBurnsPerRequest; got != testCase.want {
-				t.Errorf("scheduler_max_burns_per_request = %d, want %d", got, testCase.want)
+				t.Errorf("max_burns_per_request = %d, want %d", got, testCase.want)
 			}
 		})
 	}
@@ -313,7 +312,7 @@ func TestTheBurnRunIsReachableWithoutARedeploy(t *testing.T) {
 				t.Fatalf("Build(): %v", err)
 			}
 			if got := configuration.Scheduler.MaxConsecutiveBurns; got != testCase.want {
-				t.Errorf("scheduler_max_consecutive_burns = %d, want %d", got, testCase.want)
+				t.Errorf("max_consecutive_burns = %d, want %d", got, testCase.want)
 			}
 		})
 	}

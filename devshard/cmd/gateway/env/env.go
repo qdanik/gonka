@@ -43,6 +43,8 @@ type Values struct {
 
 	PoCMode *string
 
+	ModelsJSON *string
+
 	DispatchQueueDepth *int64
 
 	ChatCacheMaxBytes *int64
@@ -282,6 +284,7 @@ func Load() (Values, error) {
 	readLenientBool("DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
 	readLenientBool("DEVSHARD_ESCROW_ROTATION_PREVIOUS_EPOCH_SETTLEMENT_ENABLED", &values.RotationPreviousEpochSettlementEnabled)
 	readString("DEVSHARD_ESCROW_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
+	readString("GATEWAY_MODELS_JSON", &values.ModelsJSON)
 	readStrictInt("GATEWAY_MATCH_WAIT_MS", &values.MatchWaitMS)
 	readStrictInt("GATEWAY_MAX_CONSECUTIVE_BURNS", &values.MaxConsecutiveBurns)
 	readStrictInt("GATEWAY_MAX_BURNS_PER_REQUEST", &values.MaxBurnsPerRequest)
@@ -352,6 +355,8 @@ func Load() (Values, error) {
 	readStrictInt("GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES", &values.EngineMaxConcurrentTimeoutVotes)
 	readStrictInt("GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS", &values.EngineHedgeFirstTokenFloorMS)
 	readStrictInt("GATEWAY_ENGINE_MAX_STARTED_ATTEMPTS_PER_REQUEST", &values.EngineMaxStartedAttemptsPerRequest)
+	readStrictInt("GATEWAY_ENGINE_MAX_ATTEMPTS_PER_REQUEST", &values.EngineMaxAttemptsPerRequest)
+	readStrictInt("GATEWAY_DRAIN_TIMEOUT_SECONDS", &values.DrainTimeoutSeconds)
 
 	readLenientBool("DEVSHARD_ENABLE_CONTENTION_PROFILES", &values.ContentionProfiles)
 
