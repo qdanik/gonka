@@ -18,11 +18,12 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 // fleetGates is the part of the ladder that depends on the model alone. See routing.md, "Pricing an escrow by the burns it will cost".
 func (s *Scheduler) fleetGates(model string, snapshot chain.PhaseSnapshot) availability {
 	preserved := pocPreserved(snapshot, model)
-	participants := s.participants()
+	settings := s.settingsInForce()
+	participants := settings.For(model).Scheduler.Participants
 	return availability{
 		untrusted:   refusedByTrust(participants.Trust, participants.Unthrottled),
 		unthrottled: waivesThrottling(participants.Unthrottled),
-		shadowed:    markedShadow(participants.Shadow),
+		shadowed:    shadowedOn(settings, model),
 		pocRequired: func(participant string) bool { return preserved != nil && !preserved[participant] },
 		congested:   func(participant string) blockReason { return blockForAdmission(s.limiter.Admits(participant, model)) },
 		ejected:     func(participant string) bool { return s.perf.Ejected(participant, model) },

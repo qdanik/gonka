@@ -42,6 +42,7 @@ const (
 	ParticipantsTrust       = "participants_trust"
 	ParticipantsShadow      = "participants_shadow"
 	ParticipantsUnthrottled = "participants_unthrottled"
+	ParticipantsByModel     = "participants_by_model"
 )
 
 const (

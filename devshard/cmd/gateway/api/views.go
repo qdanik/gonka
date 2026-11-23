@@ -63,6 +63,33 @@ func filterOptions(configuration *config.Config, admin bool, stopTokenVocabulary
 	}
 }
 
+type participantLists struct {
+	Trust       []string `json:"trust"`
+	Shadow      []string `json:"shadow"`
+	Unthrottled []string `json:"unthrottled"`
+}
+
+type participantsInForce struct {
+	Network participantLists            `json:"network"`
+	Models  map[string]participantLists `json:"models"`
+}
+
+func participantViews(configuration *config.Config) participantsInForce {
+	view := participantsInForce{Network: listsOf(configuration.Scheduler.Participants), Models: map[string]participantLists{}}
+	for _, model := range configuration.ModelNames() {
+		view.Models[model] = listsOf(configuration.For(model).Scheduler.Participants)
+	}
+	return view
+}
+
+func listsOf(participants config.Participants) participantLists {
+	return participantLists{
+		Trust:       append([]string{}, participants.Trust...),
+		Shadow:      append([]string{}, participants.Shadow...),
+		Unthrottled: append([]string{}, participants.Unthrottled...),
+	}
+}
+
 func modelTokenLimits(configuration *config.Config) func(string) (uint64, uint64) {
 	if !configuration.HasModels() {
 		return nil

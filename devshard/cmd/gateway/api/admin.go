@@ -30,11 +30,12 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":   s.version,
-		"devshards": devshardViews(records),
-		"rotation":  rotationViews(statuses),
-		"overrides": overrides,
-		"status":    s.status(s.routableEscrows()),
+		"version":      s.version,
+		"devshards":    devshardViews(records),
+		"rotation":     rotationViews(statuses),
+		"overrides":    overrides,
+		"participants": participantViews(s.config.Load()),
+		"status":       s.status(s.routableEscrows()),
 	})
 }
 
@@ -77,6 +78,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		logkey.ParticipantsTrust, inForce.Scheduler.Participants.Trust,
 		logkey.ParticipantsShadow, inForce.Scheduler.Participants.Shadow,
 		logkey.ParticipantsUnthrottled, inForce.Scheduler.Participants.Unthrottled,
+		logkey.ParticipantsByModel, participantViews(inForce).Models,
 	)
 	writeJSON(w, http.StatusOK, overrides)
 }

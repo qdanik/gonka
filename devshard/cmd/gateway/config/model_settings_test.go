@@ -65,6 +65,9 @@ func modelSettingsWith(t *testing.T, index int, pointerType reflect.Type, choice
 		value.Elem().SetString(string(rune('a' + choice)))
 	case reflect.Bool:
 		value.Elem().SetBool(choice == 1)
+	case reflect.Struct:
+		lists := value.Interface().(*ParticipantOverrides)
+		lists.Shadow = &[]string{"gonka1shadow" + string(rune('a'+choice))}
 	default:
 		t.Fatalf("no value for a setting of kind %s", value.Elem().Kind())
 	}
