@@ -14,13 +14,16 @@ import (
 	"devshard/logging"
 )
 
-func resolveModels(network *Config, modelsJSON *string, admin map[string]ModelSettings) error {
+func resolveModels(network *Config, modelsJSON *string, legacy, admin map[string]ModelSettings) error {
 	fromEnvironment, err := parseModelsJSON(modelsJSON)
 	if err != nil {
 		return err
 	}
-	identifiers := slices.Sorted(maps.Keys(fromEnvironment))
-	identifiers = append(identifiers, slices.Sorted(maps.Keys(admin))...)
+	named := slices.Sorted(maps.Keys(fromEnvironment))
+	named = append(named, slices.Sorted(maps.Keys(admin))...)
+	slices.Sort(named)
+	named = slices.Compact(named)
+	identifiers := append(slices.Clone(named), slices.Sorted(maps.Keys(legacy))...)
 	slices.Sort(identifiers)
 	identifiers = slices.Compact(identifiers)
 	if len(identifiers) == 0 {
@@ -28,7 +31,7 @@ func resolveModels(network *Config, modelsJSON *string, admin map[string]ModelSe
 		return nil
 	}
 
-	problems, stale := unknownModelProblems(identifiers, fromEnvironment, network.Rotation.ModelsJSON)
+	problems, stale := unknownModelProblems(named, fromEnvironment, network.Rotation.ModelsJSON)
 	inherited := problemTexts(network.problems())
 	effective := make(map[string]*Config, len(identifiers))
 	for _, identifier := range identifiers {
@@ -41,6 +44,7 @@ func resolveModels(network *Config, modelsJSON *string, admin map[string]ModelSe
 		}
 		model := *network
 		applyModelSettings(&model, fromEnvironment[identifier])
+		applyModelSettings(&model, legacy[identifier])
 		applyModelSettings(&model, admin[identifier])
 		for _, problem := range model.problems() {
 			if !inherited[problem.Error()] {
@@ -116,5 +120,5 @@ func rotationModelIDs(raw string) []string {
 
 // ResolveModels gives the models named in settings their effective configurations over this one, as Build does for the admin layer.
 func (c *Config) ResolveModels(settings map[string]ModelSettings) error {
-	return resolveModels(c, nil, settings)
+	return resolveModels(c, nil, nil, settings)
 }

@@ -138,6 +138,7 @@ func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 // templateSecrets substitutes the templates' placeholder keys so parsing them is not judged as a real secret.
 var templateSecrets = map[string]string{
 	"DEVSHARD_ADMIN_API_KEY": "sk-admin-template-placeholder",
+	"DEVSHARD_API_KEYS":      "sk-template-placeholder",
 }
 
 func buildFromTemplate(t *testing.T, deployedEnvTemplate string) {

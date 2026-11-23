@@ -62,19 +62,25 @@ Client keys live in the `api_keys` table of `gateway.db`, **in plain text**: the
 
 | Call | What it does |
 | --- | --- |
-| `GET /v1/admin/api-keys` | lists every key as `id`, `label`, `created_at`, `revoked` and `revoked_at`, never a key value |
+| `GET /v1/admin/api-keys` | lists every key as `id`, `source`, `label`, `created_at`, `revoked` and `revoked_at`, never a key value |
 | `POST /v1/admin/api-keys` | creates a key from `{"label": "...", "key": "..."}`, both optional; without `key` the gateway generates one; the answer carries the key |
-| `GET /v1/admin/api-keys/{id}` | one key with its value, audit-logged without it |
+| `GET /v1/admin/api-keys/{id}` | one key with its value, audit-logged without it; a legacy environment key has no value |
 | `DELETE /v1/admin/api-keys/{id}` | revokes the key; the row stays, and a second revoke answers 200 with the first revoked time |
 
 ```
 curl -X POST -H "Authorization: Bearer $DEVSHARD_ADMIN_API_KEY" -d '{"label":"billing"}' "$GATEWAY/v1/admin/api-keys"
-{"id":"3f9a1c2e","label":"billing","created_at":"2026-01-02T03:04:05.000000000Z","revoked":false,"key":"sk-..."}
+{"id":"3f9a1c2e","source":"database","label":"billing","created_at":"2026-01-02T03:04:05.000000000Z","revoked":false,"key":"sk-..."}
 ```
 
 The `id` is the first eight hex characters of the key's SHA-256, the `api_key_id` the request record carries ([observability.md](./observability.md), "The request record"). A create whose `id` exists, revoked or not, answers 409, so an id is never reused. A supplied key shorter than 16 characters, containing whitespace (no `Bearer` header can carry it) or equal to the admin key answers 400. To rotate a key, create the new one and revoke the old one.
 
 An `api_key` model needs an active key. Revoking the last active key while the network `access` or any model's `access` is `api_key` answers 409, and a settings write that leaves such a model with no active key answers 400. A gateway whose database holds no key and whose settings put a model on `api_key` still starts, and logs a warning that an `api_key` model has no active key, so the first key can be created. A settings write is refused only when it creates that state, so the kill switch and every other setting stay writable until a key exists, and the rule binds again once a key does. A stored block for a model `rotation_models_json` no longer lists is ignored, so it never counts as an `api_key` model. A `DEVSHARD_ADMIN_API_KEY` equal to an active database client key fails the boot: a database client key must differ from the admin key. The `api key created`, `api key read` and `api key revoked` audit lines carry the `api_key_id` and `api_key_label`.
+
+### Legacy inputs
+
+- Legacy `model_limits` (deprecated, removal planned for v7 or v8): the settings key is still accepted and read as `models.<id>` with the same field names; set `models.<id>` instead, which wins field by field, and a boot or a write holding the key logs a warning.
+- Legacy `model_access` (deprecated, removal planned for v7 or v8): the settings key is still read as `models.<id>.access`; set `models.<id>.access` instead, which wins when both name the model, and a boot or a write holding the key logs a warning.
+- Legacy `DEVSHARD_API_KEYS` (deprecated, removal planned for v7 or v8): the variable is still read, comma-separated and each key at least 16 characters, and its keys are active beside the database keys; create them through `POST /v1/admin/api-keys` instead. The list and a read by id show them with `source` `env`, no value and no `created_at`, and they cannot be revoked or created again through the API (409): to remove one, move its clients to a new key, then unset the variable.
 
 ### The kill switch
 

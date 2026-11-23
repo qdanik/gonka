@@ -3,6 +3,7 @@ package config
 import (
 	"cmp"
 	"slices"
+	"strings"
 
 	"devshard/cmd/gateway/env"
 )
@@ -15,6 +16,9 @@ func Build(values env.Values, overrides Overrides, clientKeys ...string) (*Confi
 	applyTunables(&configuration, values.Tunables)
 	overrideIfSet(&configuration.Server.Port, values.Port)
 	overrideIfSet(&configuration.Server.StorageDir, values.StorageDir)
+	if values.APIKeys != nil {
+		configuration.Server.EnvAPIKeys = splitCommaSeparated(*values.APIKeys)
+	}
 	overrideIfSet(&configuration.Server.AdminAPIKey, values.AdminAPIKey)
 	overrideIfSet(&configuration.Server.DevshardsJSON, values.DevshardsJSON)
 	overrideIfSet(&configuration.Server.MaxConcurrentRuntimeBuilds, values.MaxConcurrentRuntimeBuilds)
@@ -91,15 +95,27 @@ func Build(values env.Values, overrides Overrides, clientKeys ...string) (*Confi
 	overrideIfSet(&configuration.Limits.HostCutoff.MaxMS, overrides.HostCutoffMaxMS)
 	overrideIfSet(&configuration.Limits.Access, overrides.Access)
 
-	configuration.Server.APIKeys = slices.Clone(clientKeys)
+	configuration.Server.APIKeys = append(slices.Clone(configuration.Server.EnvAPIKeys), clientKeys...)
 
 	if err := configuration.Validate(); err != nil {
 		return nil, err
 	}
-	if err := resolveModels(&configuration, values.ModelsJSON, overrides.Models); err != nil {
+	if err := resolveModels(&configuration, values.ModelsJSON, overrides.legacyModelSettings(), overrides.Models); err != nil {
 		return nil, err
 	}
 	return &configuration, nil
+}
+
+func splitCommaSeparated(raw string) []string {
+	parts := strings.Split(raw, ",")
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return cleaned
 }
 
 // overrideIfSet: a nil source leaves the lower layer's value in place.

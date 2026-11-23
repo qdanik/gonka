@@ -15,6 +15,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/internal/logkey"
@@ -47,6 +48,8 @@ var (
 	ErrUnknownAPIKey = errors.New("unknown API key")
 
 	ErrLastAPIKey = errors.New("the last active API key cannot be revoked while a model is api_key")
+
+	ErrEnvAPIKey = errors.New("an API key set through " + env.APIKeysVariable + " cannot be created or revoked here")
 
 	ErrPrivateKeyEnvRequired = errors.New("private_key_env is required; a raw private_key is not accepted")
 
@@ -195,7 +198,7 @@ func statusForError(err error) int {
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrPrivateKeyEnvRequired), errors.Is(err, ErrInvalidEscrowID), errors.Is(err, config.ErrInvalid), errors.Is(err, escrow.ErrAmountBelowFloor):
 		return http.StatusBadRequest
-	case errors.Is(err, ErrDevshardNotActivatable), errors.Is(err, store.ErrAPIKeyIDTaken), errors.Is(err, ErrLastAPIKey):
+	case errors.Is(err, ErrDevshardNotActivatable), errors.Is(err, store.ErrAPIKeyIDTaken), errors.Is(err, ErrLastAPIKey), errors.Is(err, ErrEnvAPIKey):
 		return http.StatusConflict
 	case errors.Is(err, ErrUnknownDevshard), errors.Is(err, ErrUnknownParticipant), errors.Is(err, ErrUnknownAPIKey):
 		return http.StatusNotFound

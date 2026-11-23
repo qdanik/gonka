@@ -70,6 +70,9 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		s.writeErrorFor(w, err)
 		return
 	}
+	if written, err := config.ParseOverrides(body); err == nil {
+		written.WarnLegacyKeys()
+	}
 	inForce := s.config.Load()
 	auditAdmin("settings written",
 		logkey.Method, r.Method,

@@ -13,6 +13,7 @@ type Server struct {
 	Port                       int64
 	StorageDir                 string
 	APIKeys                    []string
+	EnvAPIKeys                 []string
 	AdminAPIKey                string
 	DevshardsJSON              string
 	MaxConcurrentRuntimeBuilds int64
