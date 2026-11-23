@@ -73,8 +73,8 @@ func TestAPacedStepWaitsForTheDeadlineThenPacesThenVotes(t *testing.T) {
 }
 
 // Test flow:
-//  1. Settle a paced step through a handler whose first vote says the record is not due, so the wait runs again.
-//  2. Assert the pace ran before each of the two votes, once per vote and never before a wait.
+//  1. Settle a paced step through a handler whose first vote says the record is not due, then settle it once more.
+//  2. Assert the first settle comes back deferred after one wait, pace and vote, the second casts the vote, and the pace ran before each of the two votes, never before a wait.
 func TestAPacedStepPacesEveryVoteItCasts(t *testing.T) {
 	handler := &pacedHandler{waitsLeft: 1, voteResult: user.TimeoutResult{Applied: true}}
 	pace := func(context.Context) error {
@@ -82,10 +82,14 @@ func TestAPacedStepPacesEveryVoteItCasts(t *testing.T) {
 		return nil
 	}
 
-	_, err := pacedStep(handler, pace)
+	first, err := pacedStep(handler, pace)
+	if err != nil || !first.Deferred {
+		t.Fatalf("first SettleTimeout() = %+v, %v, want a deferred vote", first, err)
+	}
+	second, err := pacedStep(handler, pace)
 
-	if err != nil {
-		t.Fatalf("SettleTimeout() = %v, want nil", err)
+	if err != nil || second.Deferred {
+		t.Fatalf("second SettleTimeout() = %+v, %v, want the cast vote", second, err)
 	}
 	if want := []string{"wait", "pace", "vote", "wait", "pace", "vote"}; !slices.Equal(handler.steps, want) {
 		t.Fatalf("steps = %v, want %v", handler.steps, want)

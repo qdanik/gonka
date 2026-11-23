@@ -79,30 +79,15 @@ func (s *SessionTimeouts) settle(ctx context.Context, step TimeoutStep) (result 
 	if ctx.Err() == nil && s.VoteDeadline(step.Nonce, step.StartedAt).After(time.Now()) {
 		return user.TimeoutResult{}, true, nil
 	}
-	if step.Pace != nil {
-		result, err = s.settlePaced(ctx, step)
-		return result, false, err
-	}
 	reason, ready, skipped, err := s.handler.WaitTimeoutDeadline(ctx, step.Nonce, step.StartedAt)
 	if !ready {
 		return skipped, false, err
 	}
-	result, needsWait, err := s.handler.VoteTimeout(ctx, step.Nonce, step.StartedAt, s.payload, reason)
-	return result, needsWait, err
-}
-
-func (s *SessionTimeouts) settlePaced(ctx context.Context, step TimeoutStep) (user.TimeoutResult, error) {
-	for {
-		reason, ready, skipped, err := s.handler.WaitTimeoutDeadline(ctx, step.Nonce, step.StartedAt)
-		if !ready {
-			return skipped, err
-		}
+	if step.Pace != nil {
 		if err := step.Pace(ctx); err != nil {
-			return user.TimeoutResult{Outcome: pacedCanceledOutcome, DetailReason: pacedCanceledDetail}, err
-		}
-		result, needsWait, err := s.handler.VoteTimeout(ctx, step.Nonce, step.StartedAt, s.payload, reason)
-		if !needsWait {
-			return result, err
+			return user.TimeoutResult{Outcome: pacedCanceledOutcome, DetailReason: pacedCanceledDetail}, false, err
 		}
 	}
+	result, needsWait, err := s.handler.VoteTimeout(ctx, step.Nonce, step.StartedAt, s.payload, reason)
+	return result, needsWait, err
 }

@@ -372,7 +372,7 @@ func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedA
 			return forecast
 		}
 		forecast.burns++
-		if !queued.exclude[slot] {
+		if !queued.exclude[slot] && !gates.shadowMember(slot) {
 			forecast.charged++
 		}
 	}
