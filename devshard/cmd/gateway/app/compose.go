@@ -160,11 +160,7 @@ type gateway struct {
 }
 
 func compose(ctx context.Context, values env.Values, storageDir string, gatewayStore *store.Store, openSessions sessionSources) (*gateway, error) {
-	overrides, err := gatewayStore.LoadOverrides(ctx)
-	if err != nil {
-		return nil, err
-	}
-	configuration, err := config.Build(values, overrides)
+	configuration, err := bootConfiguration(ctx, values, gatewayStore)
 	if err != nil {
 		return nil, err
 	}

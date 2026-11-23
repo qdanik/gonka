@@ -184,6 +184,7 @@ type fakeControl struct {
 	devshards []store.DevshardRecord
 	overrides config.Overrides
 	rotation  []store.RotationStatus
+	apiKeys   []store.APIKeyRecord
 	listErr   error
 }
 
@@ -212,6 +213,19 @@ func (f *fakeControl) LoadRotationStatuses(context.Context) ([]store.RotationSta
 	return f.rotation, nil
 }
 
+func (f *fakeControl) ListAPIKeys(context.Context) ([]store.APIKeyRecord, error) {
+	return f.apiKeys, nil
+}
+
+func (f *fakeControl) APIKey(_ context.Context, id string) (store.APIKeyRecord, bool, error) {
+	for _, record := range f.apiKeys {
+		if record.ID == id {
+			return record, true, nil
+		}
+	}
+	return store.APIKeyRecord{}, false, nil
+}
+
 type fakeOperations struct {
 	mu          sync.Mutex
 	calls       []string
@@ -225,6 +239,7 @@ type fakeOperations struct {
 	imported    []ImportDevshardRequest
 	deleted     []string
 	deactivated []string
+	createdKeys []store.APIKeyRecord
 	applied     config.Overrides
 }
 
@@ -309,6 +324,17 @@ func (f *fakeOperations) Reconfigure(_ context.Context, overrides config.Overrid
 	f.applied = overrides
 	f.mu.Unlock()
 	return f.record("reconfigure")
+}
+
+func (f *fakeOperations) CreateAPIKey(_ context.Context, record store.APIKeyRecord) error {
+	f.mu.Lock()
+	f.createdKeys = append(f.createdKeys, record)
+	f.mu.Unlock()
+	return f.record("create_api_key")
+}
+
+func (f *fakeOperations) RevokeAPIKey(context.Context, string, time.Time) error {
+	return f.record("revoke_api_key")
 }
 
 func (f *fakeOperations) appliedOverrides() config.Overrides {

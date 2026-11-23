@@ -22,7 +22,6 @@ type Values struct {
 	Tunables
 	Port                       *int64
 	StorageDir                 *string
-	APIKeys                    *string
 	AdminAPIKey                *string
 	DevshardsJSON              *string
 	MaxConcurrentRuntimeBuilds *int64
@@ -240,7 +239,6 @@ func Load() (Values, error) {
 
 	readLenientInt("DEVSHARD_PORT", 1, &values.Port)
 	readString("DEVSHARD_STORAGE_DIR", &values.StorageDir)
-	readString("DEVSHARD_API_KEYS", &values.APIKeys)
 	readString("DEVSHARD_ADMIN_API_KEY", &values.AdminAPIKey)
 	readString("DEVSHARDS_JSON", &values.DevshardsJSON)
 	readLenientInt("DEVSHARD_MAX_CONCURRENT_RUNTIME_BUILDS", 1, &values.MaxConcurrentRuntimeBuilds)

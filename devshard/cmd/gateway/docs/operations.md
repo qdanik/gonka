@@ -123,12 +123,12 @@ The chain names a new version with a new model id. Every setting is keyed by the
 | Tier | Who |
 | --- | --- |
 | `open` | anyone |
-| `api_key` | a caller presenting one of `DEVSHARD_API_KEYS` |
+| `api_key` | a caller presenting an active client key ("Client API keys" below) |
 | `admin_only` | a caller presenting `DEVSHARD_ADMIN_API_KEY` |
 
 **Two behaviours to know before editing it:**
 
-- A model with no `access` of its own and no network `access` is `admin_only`. A deployment starts with no entries, so until the operator names a model `open` or `api_key` only the admin reaches it, and setting `DEVSHARD_API_KEYS` alone opens nothing. While any model is `open` the gateway logs a warning naming it, at startup and after every admin override, since an open model spends the operator's escrows for any caller.
+- A model with no `access` of its own and no network `access` is `admin_only`. A deployment starts with no entries, so until the operator names a model `open` or `api_key` only the admin reaches it, and creating a client key alone opens nothing. While any model is `open` the gateway logs a warning naming it, at startup and after every admin override, since an open model spends the operator's escrows for any caller.
 - With `DEVSHARD_ADMIN_API_KEY` unset the whole admin surface answers **404, not 401** — the routes do not exist rather than rejecting the caller. A "route not found" on `/v1/admin/…` usually means the key is missing, not the path. Without it no one can set `access` either, so every model stays admin-only and the gateway serves no client.
 
 An admin key satisfies every tier, so admin calls never need a second key. A `PUT` of the settings replaces the whole override set, so a `PUT` that leaves out `models` drops every model's admin block, and a model with no `access` of its own is then reachable only as the network `access` and `GATEWAY_MODELS_JSON` allow; a `POST` changes only the fields it names ("Configuration").
@@ -138,6 +138,26 @@ The `models` setting is also the list of models the gateway offers (`config.Conf
 ### Per-model settings
 
 Every setting that applies to the whole network can also be set for one model, under `models.<id>` in `/v1/admin/settings`, with the same key as the network setting: `{"max_burns_per_request": 16, "models": {"MiniMaxAI/MiniMax-M2.7": {"max_burns_per_request": 8, "host_cutoff_max_ms": 60000}}}`. A field a model leaves out inherits the network value, and `max_model_len` is the one key only a model has. The same JSON in `GATEWAY_MODELS_JSON` sets them at boot; the admin value wins per model and per field. The whole configuration is validated again with each model's values laid over it, so a model that raises `host_cutoff_max_ms` past its own `perf_ejection_max_seconds` is refused as `models[<id>].host_cutoff_max_ms`. Process-wide keys (the kill switch, the buffers, the funding loop, `engine_max_concurrent_timeout_votes`, `perf_host_staleness_seconds`) are not accepted under `models`: a 400. A stored block for a model `rotation_models_json` no longer lists does not stop the gateway starting, and does not stop a key being created or revoked: the boot logs a warning and the block is ignored. Every settings write is then refused with a 400 naming the model until `{"models": {"<id>": null}}` clears it. `config/README.md` has the key rules.
+
+### Client API keys
+
+Client keys live in the `api_keys` table of `gateway.db`, **in plain text**: the storage directory and every archive of it are as secret as the keys. They are managed through the admin API and apply on the next request, with no restart.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/admin/api-keys` | lists every key as `id`, `label`, `created_at`, `revoked` and `revoked_at`, never a key value |
+| `POST /v1/admin/api-keys` | creates a key from `{"label": "...", "key": "..."}`, both optional; without `key` the gateway generates one; the answer carries the key |
+| `GET /v1/admin/api-keys/{id}` | one key with its value, audit-logged without it |
+| `DELETE /v1/admin/api-keys/{id}` | revokes the key; the row stays, and a second revoke answers 200 with the first revoked time |
+
+```
+curl -X POST -H "Authorization: Bearer $DEVSHARD_ADMIN_API_KEY" -d '{"label":"billing"}' "$GATEWAY/v1/admin/api-keys"
+{"id":"3f9a1c2e","label":"billing","created_at":"2026-01-02T03:04:05.000000000Z","revoked":false,"key":"sk-..."}
+```
+
+The `id` is the first eight hex characters of the key's SHA-256, the `api_key_id` the request record carries ("The request record"). A create whose `id` exists, revoked or not, answers 409, so an id is never reused. A supplied key shorter than 16 characters, containing whitespace (no `Bearer` header can carry it) or equal to the admin key answers 400. To rotate a key, create the new one and revoke the old one.
+
+An `api_key` model needs an active key. Revoking the last active key while the network `access` or any model's `access` is `api_key` answers 409, and a settings write that leaves such a model with no active key answers 400. A gateway whose database holds no key and whose settings put a model on `api_key` still starts, and logs a warning that an `api_key` model has no active key, so the first key can be created. A settings write is refused only when it creates that state, so the kill switch and every other setting stay writable until a key exists, and the rule binds again once a key does. A stored block for a model `rotation_models_json` no longer lists is ignored, so it never counts as an `api_key` model. A `DEVSHARD_ADMIN_API_KEY` equal to an active client key fails the boot: a client key must differ from the admin key. The `api key created`, `api key read` and `api key revoked` audit lines carry the `api_key_id` and `api_key_label`.
 
 ### The kill switch
 
@@ -240,7 +260,7 @@ These are read the same way and rarely need changing. Where a knob has a longer 
 | `DEVSHARD_GATEWAY_DISABLED_MESSAGE` | empty | the text of the 503 a disabled gateway answers ("The kill switch" above) |
 | `DEVSHARD_ENABLE_CONTENTION_PROFILES` | false | whether lock contention and blocking are sampled, so `/debug/pprof/mutex` and `/debug/pprof/block` hold data; it costs a little on every contended lock, so it stays off outside a diagnosis, and turning it on is logged |
 | `DEVSHARD_GATEWAY_DISABLED_NEW_URL` | empty | the URL a disabled gateway redirects to with 308; empty means 503 |
-| `DEVSHARD_API_KEYS` / `DEVSHARD_ADMIN_API_KEY` | empty / empty | the client keys an `api_key` model accepts and the admin key; a key shorter than 16 characters is refused, client or admin, and an empty admin key leaves the admin surface unrouted ("Who may call what" above) |
+| `DEVSHARD_ADMIN_API_KEY` | empty | the admin key; a key shorter than 16 characters is refused, and an empty one leaves the admin surface unrouted ("Who may call what" above); client keys are not set here ("Client API keys" above) |
 | `DEVSHARDS_JSON` | empty | the escrows seeded into the store at boot, each naming its `id` (the chain escrow id in canonical decimal; any other fails the boot), `model` and `private_key_env` ("Boot" below) |
 | `DEVSHARD_CHAIN_GRPC` / `DEVSHARD_CHAIN_RPC` | `localhost:9090` / empty | the chain's gRPC endpoint, and the CometBFT RPC every chain call falls back to when gRPC is unreachable, queries and transactions alike; the gateway runs with gRPC unreachable as long as `DEVSHARD_CHAIN_RPC` points at a live CometBFT RPC, and a transaction broadcast runs once on the transport the reads selected; an empty RPC endpoint is derived from the gRPC host at the standard port ([`README.md`](../README.md), "Escrow sessions and the chain connection") |
 | `DEVSHARD_PUBLIC_API` | `http://localhost:9000` | the public API the phase observer polls; it must be an absolute URL |
@@ -423,7 +443,7 @@ The record carries no request or response body — capture files exist for that,
 
 `escrow` is always the escrow id as text. The chain carries the id behind `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` as a number, and `escrow/` and `chain/` convert it to text before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
 
-Admin lines carry the action and its subject, **never the request body** — an override payload can hold the admin key. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
+Admin lines carry the action and its subject, **never a request body and never a key value**. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
 
 ## Metrics
 
@@ -623,6 +643,7 @@ How each escrow reaches its hosts is in two series: `devshard_gateway_escrow_ses
 | one escrow's protocol state | `GET /devshard/{id}/v1/state` |
 | what happened to one request's nonces | `GET /v1/requests/{id}` |
 | hosts the gateway distrusts | `GET /v1/admin/suspicious-hosts` |
+| the client API keys, without their values | `GET /v1/admin/api-keys` |
 | which filters each model runs, and where they come from | `GET /v1/admin/filters` |
 | why one host is or is not taking work | `GET /v1/admin/hosts` |
 
@@ -722,7 +743,7 @@ What a rollback reads depends on what the newer release wrote into the storage d
 
 ## Backup and restore
 
-The storage directory (`DEVSHARD_STORAGE_DIR`, mounted from `DEVSHARD_STORAGE_HOST_DIR`) holds everything the gateway remembers: `gateway.db` (escrow rows, create commitments, admin overrides), `accounting.db` (the nonce ledger) and one `escrow-<id>/` directory per escrow session. The three describe the same escrows at the same moment, so they are archived together and restored together: a `gateway.db` older than the session directories beside it lacks the rows of escrows those sessions serve, and session directories older than the rows hold nonces the hosts have moved past. No command takes a backup for you; this is the manual procedure.
+The storage directory (`DEVSHARD_STORAGE_DIR`, mounted from `DEVSHARD_STORAGE_HOST_DIR`) holds everything the gateway remembers: `gateway.db` (escrow rows, create commitments, admin overrides, client API keys), `accounting.db` (the nonce ledger) and one `escrow-<id>/` directory per escrow session. The three describe the same escrows at the same moment, so they are archived together and restored together: a `gateway.db` older than the session directories beside it lacks the rows of escrows those sessions serve, and session directories older than the rows hold nonces the hosts have moved past. No command takes a backup for you; this is the manual procedure.
 
 1. **Stop routing.** Turn on the kill switch ("The kill switch") through the admin settings: `curl -X POST -H "Authorization: Bearer $DEVSHARD_ADMIN_API_KEY" -d '{"disabled": true}' "$GATEWAY/v1/admin/settings"`. Clients are refused from then on; the admin and recovery surfaces stay up.
 2. **Wait for the drain.** `devshard_gateway_inflight_requests` reaches 0 once the last client has its answer, and `devshard_gateway_owed_timeout_votes` reaches 0 once every vote the races owe is posted, which can take as long as the protocol's own deadline, half an hour after a host confirmed the work ([race.md](./race.md), "The timeout-vote queue").
@@ -743,7 +764,7 @@ The gateway reads none of devshardctl's state: its own store starts empty ([`rul
 1. Stop new work on devshardctl (its kill switch), and let its in-flight requests finish.
 2. Settle every escrow it holds, or let it drain and settle them, and wait until it reports no open create commitment and no settle-pending escrow.
 3. Copy the session directory of every escrow still worth serving and import each through `POST /v1/admin/devshards/import`, naming the variable that holds its key; an escrow with nothing left to serve is settled in step 2 instead.
-4. Set `access` for each model under `models` in the settings before opening the gateway to clients: every model starts admin-only ("Who may call what").
+4. Create the client keys with `POST /v1/admin/api-keys` and set `access` for each model under `models` in the settings before opening the gateway to clients: every model starts admin-only, and a model on the `api_key` tier answers no one until a key exists ("Who may call what", "Client API keys").
 
 An escrow the chain already reports settled is never published: a seeded one has its session refused at open and its row deleted ("Boot", step 5), and importing one fails with `bridge.ErrEscrowSettled`, its row left for the next publication to delete. An escrow that settles on chain while it serves is parked by the escrow check that finds it settled, and the settle path then drops it without a second broadcast.
 

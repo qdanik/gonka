@@ -57,17 +57,28 @@ func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 }
 
 // Test flow:
-//  1. Build a config from an `APIKeys` environment value listing keys separated by commas with extra whitespace and an empty entry.
-//  2. Assert the built server's API keys are the three keys, trimmed and with the blank entry dropped.
-func TestBuildSplitsAPIKeys(t *testing.T) {
-	values := env.Values{APIKeys: stringPointer("first-client-key, second-client-key ,,third-client-key")}
-	configuration, err := Build(values, Overrides{})
+//  1. Build a config with two client keys passed as the active keys, then overwrite the caller's slice.
+//  2. Assert the built server's API keys are the two keys as passed, so the snapshot does not alias the caller's slice.
+//  3. Build a config with no keys and assert the server has none, with no error even though a model is `api_key`.
+func TestBuildTakesTheActiveClientKeys(t *testing.T) {
+	passed := []string{"first-client-key-0001", "second-client-key-002"}
+	configuration, err := Build(env.Values{}, Overrides{}, passed...)
 	if err != nil {
 		t.Fatalf("Build(): %v", err)
 	}
+	passed[0] = "overwritten-by-the-caller"
 	keys := configuration.Server.APIKeys
-	if len(keys) != 3 || keys[0] != "first-client-key" || keys[1] != "second-client-key" || keys[2] != "third-client-key" {
-		t.Fatalf("Server.APIKeys = %v, want three trimmed keys", keys)
+	if len(keys) != 2 || keys[0] != "first-client-key-0001" || keys[1] != "second-client-key-002" {
+		t.Fatalf("Server.APIKeys = %v, want the two keys as passed", keys)
+	}
+
+	overrides := Overrides{Models: map[string]ModelSettings{"model-a": {Access: stringPointer(ModelAccessAPIKey)}}}
+	keyless, err := Build(env.Values{}, overrides)
+	if err != nil {
+		t.Fatalf("Build() with an api_key model and no keys: %v, want nil so a gateway with no keys boots", err)
+	}
+	if len(keyless.Server.APIKeys) != 0 {
+		t.Fatalf("Server.APIKeys = %v, want none", keyless.Server.APIKeys)
 	}
 }
 
@@ -126,7 +137,6 @@ func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 
 // templateSecrets substitutes the templates' placeholder keys so parsing them is not judged as a real secret.
 var templateSecrets = map[string]string{
-	"DEVSHARD_API_KEYS":      "sk-template-placeholder",
 	"DEVSHARD_ADMIN_API_KEY": "sk-admin-template-placeholder",
 }
 

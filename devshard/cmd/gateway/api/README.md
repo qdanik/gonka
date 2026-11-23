@@ -167,7 +167,9 @@ These keys are fixed: an escrow is `id` in `/v1/status`, `/v1/admin/state` and t
 
 ## The operator and recovery surface
 
-`auditAdmin` records an operator action that changed state the gateway serves or settles from. It carries the action and its subject, never the body: an override payload can hold the admin key.
+`auditAdmin` records an operator action that changed state the gateway serves or settles from. It carries the action and its subject, never a request body and never a key value.
+
+`admin_api_keys.go` serves the client-key routes ([`docs/operations.md`](../docs/operations.md), "Client API keys"). A create and a revoke take `settingsWrites` as a settings write does, so the row and the config swap agree; a read does not. `idOfAPIKey` and `idOfDigest` are the one formula for a key's id, in the answers and in `credentials.caller`.
 
 `badRequestUnlessOversized` keeps an ingest-cap rejection at 413 while every other decode failure is treated as the client's malformed body.
 

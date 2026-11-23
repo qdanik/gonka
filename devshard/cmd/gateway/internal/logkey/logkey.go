@@ -103,6 +103,7 @@ const (
 // What the client asked for and what it got.
 const (
 	APIKeyID          = "api_key_id"
+	APIKeyLabel       = "api_key_label"
 	Stream            = "stream"
 	InputTokens       = "input_tokens"
 	InputTokensSource = "input_tokens_source"
