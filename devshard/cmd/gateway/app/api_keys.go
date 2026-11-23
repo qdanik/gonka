@@ -22,6 +22,11 @@ func bootConfiguration(ctx context.Context, values env.Values, gatewayStore *sto
 	if err != nil {
 		return nil, err
 	}
+	overrides.WarnLegacyKeys()
+	if values.APIKeys != nil {
+		logging.Warn(env.APIKeysVariable+" is deprecated: create the keys through /v1/admin/api-keys instead; removal is planned for v7 or v8",
+			logkey.Subsystem, "gateway")
+	}
 	configuration, err := config.Build(values, overrides, clientKeys...)
 	if err != nil {
 		return nil, err

@@ -42,6 +42,12 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 
 Four accessors carry rules of their own. `Server.AdminEnabled` is what callers must gate on — comparing a presented credential against `AdminAPIKey` directly would authenticate an empty one. `Config.For(model).Limits.Access` is admin-only for any model with no tier of its own, an empty `models` included, and `Config.OpenModels` lists the open ones the gateway warns about. See [`docs/operations.md`](../docs/operations.md), "Who may call what". `Limits.ContextLength` takes the `--max-model-len` governance registers over the operator's `max_model_len` pin, reads a length above `MaxContextTokens` as none, and is `NoContextLength` when neither names one; the race judges a context refusal against it and the scheduler prices an escrow's retirement floor on it.
 
+## Legacy inputs
+
+- Legacy `model_limits` (deprecated, removal planned for v7 or v8): the settings key is still accepted and read as `models.<id>` with the same field names; set `models.<id>` instead, which wins field by field, and a boot or a write holding the key logs a warning.
+- Legacy `model_access` (deprecated, removal planned for v7 or v8): the settings key is still read as `models.<id>.access`; set `models.<id>.access` instead, which wins when both name the model, and a boot or a write holding the key logs a warning.
+- Legacy `DEVSHARD_API_KEYS` (deprecated, removal planned for v7 or v8): the variable is still read, comma-separated and each key at least 16 characters, and its keys are active beside the database keys; create them through `POST /v1/admin/api-keys` instead; `Server.EnvAPIKeys` holds them and `Server.APIKeys` is them followed by the database keys. The list and a read by id show them with `source` `env`, no value and no `created_at`, and they cannot be revoked or created again through the API (409): to remove one, move its clients to a new key, then unset the variable.
+
 ## The combinations `Validate` refuses
 
 Most checks are ordinary range bounds. These are the ones that exist because a legal-looking pair is unsafe:

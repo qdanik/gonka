@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"devshard/cmd/gateway/internal/logkey"
@@ -23,11 +24,12 @@ type createAPIKeyRequest struct {
 }
 
 type apiKeyView struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	CreatedAt string `json:"created_at"`
-	Revoked   bool   `json:"revoked"`
-	RevokedAt string `json:"revoked_at,omitempty"`
+	ID        string       `json:"id"`
+	Source    apiKeySource `json:"source"`
+	Label     string       `json:"label"`
+	CreatedAt string       `json:"created_at,omitempty"`
+	Revoked   bool         `json:"revoked"`
+	RevokedAt string       `json:"revoked_at,omitempty"`
 }
 
 type apiKeyWithValue struct {
@@ -38,11 +40,16 @@ type apiKeyWithValue struct {
 func viewOfAPIKey(record store.APIKeyRecord) apiKeyView {
 	return apiKeyView{
 		ID:        record.ID,
+		Source:    apiKeySourceDatabase,
 		Label:     record.Label,
 		CreatedAt: store.FormatTime(record.CreatedAt),
 		Revoked:   record.Revoked(),
 		RevokedAt: store.FormatTime(record.RevokedAt),
 	}
+}
+
+func viewOfEnvAPIKey(id string) apiKeyView {
+	return apiKeyView{ID: id, Source: apiKeySourceEnv}
 }
 
 func viewOfAPIKeyWithValue(record store.APIKeyRecord) apiKeyWithValue {
@@ -65,6 +72,9 @@ func (s *Server) handleAdminAPIKeys(w http.ResponseWriter, r *http.Request) {
 	for _, record := range records {
 		views = append(views, viewOfAPIKey(record))
 	}
+	for _, key := range s.config.Load().Server.EnvAPIKeys {
+		views = append(views, viewOfEnvAPIKey(idOfAPIKey(key)))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"api_keys": views})
 }
 
@@ -83,6 +93,10 @@ func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		key = generated
 	}
 	record := store.APIKeyRecord{ID: idOfAPIKey(key), Key: key, Label: strings.TrimSpace(request.Label), CreatedAt: s.now()}
+	if s.isEnvAPIKey(record.ID) {
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrEnvAPIKey, record.ID))
+		return
+	}
 	s.settingsWrites.Lock()
 	defer s.settingsWrites.Unlock()
 	if err := s.operations.CreateAPIKey(r.Context(), record); err != nil {
@@ -101,6 +115,10 @@ func (s *Server) handleAdminAPIKey(w http.ResponseWriter, r *http.Request) {
 		s.revokeAPIKey(w, r)
 		return
 	}
+	if id := r.PathValue("id"); s.isEnvAPIKey(id) {
+		writeJSON(w, http.StatusOK, viewOfEnvAPIKey(id))
+		return
+	}
 	record, found := s.storedAPIKey(w, r)
 	if !found {
 		return
@@ -112,6 +130,10 @@ func (s *Server) handleAdminAPIKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	s.settingsWrites.Lock()
 	defer s.settingsWrites.Unlock()
+	if id := r.PathValue("id"); s.isEnvAPIKey(id) {
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrEnvAPIKey, id))
+		return
+	}
 	record, found := s.storedAPIKey(w, r)
 	if !found {
 		return
@@ -126,6 +148,10 @@ func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		auditAdmin("api key revoked", logkey.APIKeyID, record.ID, logkey.APIKeyLabel, record.Label)
 	}
 	writeJSON(w, http.StatusOK, viewOfAPIKey(record))
+}
+
+func (s *Server) isEnvAPIKey(id string) bool {
+	return slices.ContainsFunc(s.config.Load().Server.EnvAPIKeys, func(key string) bool { return idOfAPIKey(key) == id })
 }
 
 func (s *Server) storedAPIKey(w http.ResponseWriter, r *http.Request) (store.APIKeyRecord, bool) {

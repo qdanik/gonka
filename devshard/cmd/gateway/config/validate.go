@@ -224,6 +224,9 @@ func (c *Config) validateAccess(complain func(format string, args ...any)) {
 		if len(key) < minAPIKeyLength {
 			complain("api_keys[%d]: must be at least %d characters", index, minAPIKeyLength)
 		}
+		if index < len(c.Server.EnvAPIKeys) {
+			continue
+		}
 		if strings.ContainsFunc(key, unicode.IsSpace) {
 			complain("api_keys[%d]: must not contain whitespace, since no Bearer header can carry it", index)
 		}
