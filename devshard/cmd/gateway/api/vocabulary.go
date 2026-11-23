@@ -65,7 +65,7 @@ const (
 	filterSourceBuiltIn    filterSource = "built_in"
 	filterSourceDefault    filterSource = "default"
 	filterSourceUnreadable filterSource = "unreadable"
-	limitsSourceModel      limitsSource = "model_limits"
+	limitsSourceModel      limitsSource = "models"
 	limitsSourceGlobal     limitsSource = "global"
 )
 

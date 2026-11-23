@@ -289,8 +289,16 @@ func shardHasNoRoom(err error) bool {
 		errors.Is(err, ErrRequestBodiesFull)
 }
 
-// Retry-After is rounded up: a zero would tell a client to retry immediately, which a queue timeout does not mean.
 func (s *Server) writeErrorFor(w http.ResponseWriter, err error) {
+	s.writeErrorUnder(w, err, s.config.Load())
+}
+
+func (s *Server) writeErrorForModel(w http.ResponseWriter, err error, model string) {
+	s.writeErrorUnder(w, err, s.config.Load().For(model))
+}
+
+// Retry-After is rounded up: a zero would tell a client to retry immediately, which a queue timeout does not mean.
+func (s *Server) writeErrorUnder(w http.ResponseWriter, err error, configuration *config.Config) {
 	throttled, ours := rateLimited(err)
 	switch {
 	case ours && throttled.RetryAfter > 0:
@@ -301,7 +309,7 @@ func (s *Server) writeErrorFor(w http.ResponseWriter, err error) {
 	case modelUnavailable(err), outOfFunds(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(escrow.TickInterval.Seconds()), 10))
 	case hostsUnavailable(err), noLiveWeight(err):
-		baseMS := s.config.Load().Limits.HostCutoff.BaseMS
+		baseMS := configuration.Limits.HostCutoff.BaseMS
 		seconds := int64(math.Ceil(float64(baseMS) / float64(time.Second.Milliseconds())))
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	case requestCapped(err):

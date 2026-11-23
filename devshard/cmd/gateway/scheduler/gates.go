@@ -82,8 +82,8 @@ func (s *Scheduler) absentFromChain(escrowID string) func(string) bool {
 	}
 }
 
-func (s *Scheduler) matchWait() time.Duration {
-	return time.Duration(s.settings.Load().Scheduler.MatchWaitMS) * time.Millisecond
+func (s *Scheduler) matchWait(model string) time.Duration {
+	return time.Duration(s.settings.Load().For(model).Scheduler.MatchWaitMS) * time.Millisecond
 }
 
 func (s *Scheduler) dispatchQueueDepth() int {
@@ -91,12 +91,12 @@ func (s *Scheduler) dispatchQueueDepth() int {
 }
 
 // maxConsecutiveBurns is read per drain rather than per dispatcher, so an admin change reaches an escrow already running. See routing.md, "The forced send".
-func (s *Scheduler) maxConsecutiveBurns() int64 {
-	return s.settings.Load().Scheduler.MaxConsecutiveBurns
+func (s *Scheduler) maxConsecutiveBurns(model string) int64 {
+	return s.settings.Load().For(model).Scheduler.MaxConsecutiveBurns
 }
 
-func (s *Scheduler) maxBurnsPerRequest() int64 {
-	return s.settings.Load().Scheduler.MaxBurnsPerRequest
+func (s *Scheduler) maxBurnsPerRequest(model string) int64 {
+	return s.settings.Load().For(model).Scheduler.MaxBurnsPerRequest
 }
 
 // requestReserve prices this one request the way the chain will charge it. See capacity.md, "The balance floor".
@@ -109,7 +109,7 @@ func (s *Scheduler) retirementReserve(model string, snapshot chain.PhaseSnapshot
 	if s.settings == nil {
 		return 0
 	}
-	return s.settings.Load().Limits.RetirementReserve(model, snapshot.Models[model].MaxModelLen)
+	return s.settings.Load().For(model).Limits.RetirementReserve(snapshot.Models[model].MaxModelLen)
 }
 
 // retirementReserveFor reads the model's floor per call, so a dispatcher follows a pin or a chain length that moves.

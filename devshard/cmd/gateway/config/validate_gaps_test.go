@@ -25,7 +25,7 @@ func TestValidateRefusesShortClientKeysAndADrainBelowTheRaceDeadlines(t *testing
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			configuration := Defaults()
-			configuration.Limits.ModelAccess = map[string]string{"model-a": ModelAccessAPIKey}
+			configuration.Limits.Access = ModelAccessAPIKey
 			configuration.Server.APIKeys = []string{"a-client-key-of-reasonable-length"}
 			testCase.apply(&configuration)
 			err := configuration.Validate()
@@ -58,7 +58,7 @@ func TestValidateAcceptsTheMinimumKeyAndDrainAndZeroBounds(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			configuration := Defaults()
-			configuration.Limits.ModelAccess = map[string]string{"model-a": ModelAccessAPIKey}
+			configuration.Limits.Access = ModelAccessAPIKey
 			configuration.Server.APIKeys = []string{"a-client-key-of-reasonable-length"}
 			testCase.apply(&configuration)
 			if err := configuration.Validate(); err != nil {

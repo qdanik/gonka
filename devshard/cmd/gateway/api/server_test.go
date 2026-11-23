@@ -434,7 +434,7 @@ func newHarness(t *testing.T, tune ...func(*config.Config)) *harness {
 	configuration.Server.StorageDir = storageDir
 	configuration.Server.AdminAPIKey = adminKey
 	configuration.Server.APIKeys = []string{clientKey}
-	configuration.Limits.ModelAccess = map[string]string{"qwen": config.ModelAccessOpen}
+	grantAccess(&configuration, map[string]string{"qwen": config.ModelAccessOpen})
 	for _, adjust := range tune {
 		adjust(&configuration)
 	}
@@ -859,4 +859,18 @@ func (f *fakeModelFilters) Delete(_ context.Context, model string) error {
 	delete(f.byModel, model)
 	f.profiles = filters.NewProfileSet(f.byModel)
 	return nil
+}
+
+func mustResolveModels(configuration *config.Config, models map[string]config.ModelSettings) {
+	if err := configuration.ResolveModels(models); err != nil {
+		panic(err)
+	}
+}
+
+func grantAccess(configuration *config.Config, access map[string]string) {
+	models := make(map[string]config.ModelSettings, len(access))
+	for model, tier := range access {
+		models[model] = config.ModelSettings{Access: &tier}
+	}
+	mustResolveModels(configuration, models)
 }

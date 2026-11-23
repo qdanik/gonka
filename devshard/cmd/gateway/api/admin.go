@@ -72,7 +72,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	inForce := s.config.Load()
 	auditAdmin("settings written",
 		logkey.Method, r.Method,
-		logkey.OpenModels, inForce.Limits.OpenModels(),
+		logkey.OpenModels, inForce.OpenModels(),
 		logkey.GatewayDisabled, inForce.Modes.Disabled,
 		logkey.ParticipantsTrust, inForce.Scheduler.Participants.Trust,
 		logkey.ParticipantsShadow, inForce.Scheduler.Participants.Shadow,
