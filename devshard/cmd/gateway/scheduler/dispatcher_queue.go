@@ -68,6 +68,9 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		case burn:
 		case probe:
 			offered.decision = d.shadowDecision()
+			if _, holding := offered.decision.(hold); holding {
+				return NonceIntent{}
+			}
 		default:
 			return intentFor(offered.decision)
 		}
