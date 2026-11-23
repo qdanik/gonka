@@ -239,9 +239,11 @@ type Config struct {
 	staleModels []string
 }
 
-// PoCMode values are what Modes.PoCMode accepts, ModelAccess values what Limits.Access accepts, and NoContextLength is a model whose length neither governance nor the operator names, and AllModels stands for every model in the open-model list.
+// PoCMode values are what Modes.PoCMode accepts, ModelAccess values what Limits.Access accepts, NoContextLength is a model whose length neither governance nor the operator names, AllModels stands for every model in the open-model list, and ProbeMinOutputTokens is the fewest output tokens a shadow probe asks for.
 const (
 	NoContextLength = chain.NoMaxModelLen
+
+	ProbeMinOutputTokens = 256
 
 	PoCModeOff     = env.PoCModeOff
 	PoCModeRelaxed = env.PoCModeRelaxed

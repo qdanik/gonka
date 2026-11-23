@@ -393,6 +393,9 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 		complain("scheduler_dispatch_queue_depth: %d must be in [1, %d]", c.Scheduler.DispatchQueueDepth, maxDispatchQueueDepth)
 	}
 	c.Scheduler.Participants.validate(complain)
+	if len(c.Scheduler.Participants.Shadow) > 0 && c.Limits.MaxTokensCap < ProbeMinOutputTokens {
+		complain("participants.%s: must be empty while max_tokens_cap %d is below %d, the fewest output tokens a probe asks for", listShadow, c.Limits.MaxTokensCap, ProbeMinOutputTokens)
+	}
 }
 
 func validateRequestWindow(name string, window RequestWindow, complain func(string, ...any)) {
