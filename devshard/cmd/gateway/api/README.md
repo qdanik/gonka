@@ -71,7 +71,7 @@ Each `route` is one registered pattern. An empty label means the route is not in
 
 `handleDevshardChat` pins the race to one escrow, and refuses a pin the gateway no longer routes to as an unknown devshard (`ErrUnknownDevshard`, 404).
 
-`routableModel` refuses an unroutable model before it can take a limiter slot or an input-token budget, and fails closed on an empty registry. A model the operator offers — named in `limits.model_access` or `limits.model_limits`, via `config.Limits.Offers` — answers the same `ModelUnavailableError` as an empty registry when nothing currently routes to it; a model nobody offers answers `UnsupportedModelError` instead.
+`routableModel` refuses an unroutable model before it can take a limiter slot or an input-token budget, and fails closed on an empty registry. A model the operator offers — named in `models`, via `config.Config.Offers` — answers the same `ModelUnavailableError` as an empty registry when nothing currently routes to it; a model nobody offers answers `UnsupportedModelError` instead.
 
 ## What the boundary hands the engine
 
@@ -139,6 +139,7 @@ Both halves of `usage` latch together over an attempt, so a row can never pair o
 
   `assembleReply` answers a folded one with the same status and message in place of the assembled body, so the content before the error does not reach the client either. An error answered on either path is handed to the request record as its race error, so its full message reaches the record's `error` field. Whether a folded reply may be replayed is still judged on the host's own body, which the cache would otherwise never see: `race` returns a `hostBodyRefusedError` carrying that body's `filters.CacheRefusal` reason, and the cache counts the refusal under that reason rather than `race_failed`.
 - **A race where every attempt was refused as overloaded is the shard having nowhere to send the request, not an upstream answering badly.** `engine.ErrHostsUnavailable` answers 503 with `Retry-After` of the live `HostCutoff.BaseMS`, rounded up to whole seconds, read from `s.config` the same way every other handler reads runtime configuration — the same base a refusing host is cut off for.
+- **A request that reached its cap is told to wait longer than a busy shard is.** `scheduler.ErrRequestCapped`, which a race returns when the burn cap or the cap on started attempts refused a hedge or retry and no attempt of the request was alive, answers 503 with the overloaded message and `Retry-After` of `requestCapRetryAfter` (30 seconds). `ErrHostsBusy` keeps its one second. See [routing.md](../docs/routing.md), "The burn cap of a request".
 - **A model whose weight-derived limit is zero is the shard having no capacity, not a quota.** `limits.ErrNoLiveWeight`, which the limiter returns at once when a weight-derived concurrency limit is zero, answers 503 with the same `Retry-After` as `engine.ErrHostsUnavailable` instead of a 429 with the admission queue wait, the cadence at which a cut-off host comes back. It is not a `*limits.RateLimitError`; `limiterRefusal` still counts it under the `no_live_weight` rejection reason and journals it as a throttled request.
 
 ## What a finished request records
@@ -182,7 +183,9 @@ These keys are fixed: an escrow is `id` in `/v1/status`, `/v1/admin/state` and t
 
 ## The operator and recovery surface
 
-`auditAdmin` records an operator action that changed state the gateway serves or settles from. It carries the action and its subject, never the body: an override payload can hold the admin key.
+`auditAdmin` records an operator action that changed state the gateway serves or settles from. It carries the action and its subject, never a request body and never a key value.
+
+`admin_api_keys.go` serves the client-key routes ([`docs/operations.md`](../docs/operations.md), "Client API keys"). A create and a revoke take `settingsWrites` as a settings write does, so the row and the config swap agree; a read does not. `idOfAPIKey` and `idOfDigest` are the one formula for a key's id, in the answers and in `credentials.caller`.
 
 `badRequestUnlessOversized` keeps an ingest-cap rejection at 413 while every other decode failure is treated as the client's malformed body.
 

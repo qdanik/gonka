@@ -121,7 +121,7 @@ func (m *Manager) readModel(model ModelConfig, rows []store.DevshardRecord, comm
 			MaxUnsettled: model.MaxUnsettled, FullContextSlots: model.FullContextSlots,
 			Amount: model.Amount, CreateFee: snapshot.CreateDevshardFee,
 			FullCost: fullCost, Slot: slot, Priced: priced && snapshot.TokenPrice > 0,
-			RequestsBlocked: configuration.Modes.BlocksRequests(snapshot), InEpochPoC: snapshot.RequestsBlocked && snapshot.BlockReason == chain.BlockReasonPoC, EpochKnown: !snapshotHasNoEpochYet(snapshot),
+			RequestsBlocked: configuration.Modes.BlocksRequests(snapshot), InEpochPoC: snapshot.RequestsBlocked && snapshot.BlockReason == chain.BlockReasonPoC, InConfirmationPoC: snapshot.RequestsBlocked && snapshot.BlockReason == chain.BlockReasonConfirmationPoC, EpochKnown: !snapshotHasNoEpochYet(snapshot),
 			ServedByNetwork: served || !known, BreakerGated: m.breaker.open(model.ModelID, roleRegular),
 			InBridgeWindow:   blocksToSwitch >= 0 && blocksToSwitch <= prePoC,
 			NearBridgeWindow: blocksToSwitch > prePoC && blocksToSwitch <= nearBridgePrePoCWindows*prePoC,
@@ -248,8 +248,9 @@ func (m *Manager) narratePlanFailed(err error) {
 }
 
 func newModelPricing(modelID string, snapshot chain.PhaseSnapshot, configuration *config.Config) modelPricing {
+	configuration = configuration.For(modelID)
 	return modelPricing{
-		reserveTokens: configuration.Limits.RetirementReserve(modelID, snapshot.Models[modelID].MaxModelLen),
+		reserveTokens: configuration.Limits.RetirementReserve(snapshot.Models[modelID].MaxModelLen),
 		attempts:      uint64(scheduler.AttemptsToFund(configuration.Engine.MaxAttemptsPerRequest)),
 	}
 }

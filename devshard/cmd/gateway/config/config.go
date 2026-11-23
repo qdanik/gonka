@@ -3,8 +3,6 @@
 package config
 
 import (
-	"slices"
-
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/filters"
@@ -15,6 +13,7 @@ type Server struct {
 	Port                       int64
 	StorageDir                 string
 	APIKeys                    []string
+	EnvAPIKeys                 []string
 	AdminAPIKey                string
 	DevshardsJSON              string
 	MaxConcurrentRuntimeBuilds int64
@@ -76,15 +75,6 @@ type HostCutoff struct {
 	MaxMS         int64
 }
 
-// ModelLimits is the per-model override set; a nil pointer field inherits the global limit.
-type ModelLimits struct {
-	DefaultMaxTokens       int64  `json:"default_max_tokens"`
-	MaxTokensCap           int64  `json:"max_tokens_cap"`
-	MaxModelLen            *int64 `json:"max_model_len,omitempty"`
-	MaxConcurrentRequests  *int64 `json:"max_concurrent_requests,omitempty"`
-	MaxInputTokensInFlight *int64 `json:"max_input_tokens_in_flight,omitempty"`
-}
-
 // Limits groups admission tuning; several zeroes mean unlimited. See README.md, "What each group holds".
 type Limits struct {
 	DefaultMaxTokens            int64
@@ -102,8 +92,8 @@ type Limits struct {
 	HostWindows                 HostWindows
 	Congestion                  Congestion
 	HostCutoff                  HostCutoff
-	ModelLimits                 map[string]ModelLimits
-	ModelAccess                 map[string]string
+	Access                      string
+	MaxModelLen                 *int64
 }
 
 type Modes struct {
@@ -189,20 +179,22 @@ type HostPing struct {
 
 // Engine groups race-escalation tuning. See race.md, "Tunables and backstops".
 type Engine struct {
-	ReceiptTimeoutMS          int64
-	FirstTokenFloorMS         int64
-	FirstTokenCeilingMS       int64
-	InterChunkStallMS         int64
-	LoserGraceMS              int64
-	MaxAttemptsPerRequest     int64
-	MaxConcurrentTimeoutVotes int64
-	HedgeFirstTokenFloorMS    int64
+	ReceiptTimeoutMS             int64
+	FirstTokenFloorMS            int64
+	FirstTokenCeilingMS          int64
+	InterChunkStallMS            int64
+	LoserGraceMS                 int64
+	MaxAttemptsPerRequest        int64
+	MaxStartedAttemptsPerRequest int64
+	MaxConcurrentTimeoutVotes    int64
+	HedgeFirstTokenFloorMS       int64
 }
 
-// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send".
+// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, MaxConsecutiveBurns of 0 never forces a send and MaxBurnsPerRequest of 0 never caps a request. See routing.md, "The forced send" and "The burn cap of a request".
 type Scheduler struct {
 	MatchWaitMS         int64
 	MaxConsecutiveBurns int64
+	MaxBurnsPerRequest  int64
 	DispatchQueueDepth  int64
 	WarmNewEscrows      bool
 	Participants        Participants
@@ -242,9 +234,12 @@ type Config struct {
 	TimeoutSweep TimeoutSweep
 
 	NonceAccounting NonceAccounting
+
+	models      map[string]*Config
+	staleModels []string
 }
 
-// PoCMode values are what Modes.PoCMode accepts, ModelAccess values what Limits.ModelAccess accepts, and NoContextLength is a model whose length neither governance nor the operator names.
+// PoCMode values are what Modes.PoCMode accepts, ModelAccess values what Limits.Access accepts, and NoContextLength is a model whose length neither governance nor the operator names, and AllModels stands for every model in the open-model list.
 const (
 	NoContextLength = chain.NoMaxModelLen
 
@@ -255,63 +250,52 @@ const (
 	ModelAccessAPIKey    = "api_key"
 	ModelAccessAdminOnly = "admin_only"
 
+	AllModels = "*"
+
 	minAPIKeyLength = 16
 )
 
 // AdminEnabled is what callers must gate on: comparing against AdminAPIKey would authenticate an empty key.
 func (s Server) AdminEnabled() bool { return s.AdminAPIKey != "" }
 
-// AccessFor resolves a model's access tier. See operations.md, "Who may call what".
-func (l Limits) AccessFor(model string) string {
-	if access, ok := l.ModelAccess[model]; ok {
-		return access
-	}
-	return ModelAccessAdminOnly
-}
-
 // ContextLength is the --max-model-len governance registers, else the operator's max_model_len pin; NoContextLength when neither names a usable one. See race.md, "Escalation".
-func (l Limits) ContextLength(model string, governedMaxModelLen uint64) uint64 {
+func (l Limits) ContextLength(governedMaxModelLen uint64) uint64 {
 	if governedMaxModelLen != chain.NoMaxModelLen && governedMaxModelLen <= MaxContextTokens {
 		return governedMaxModelLen
 	}
-	if pinned := l.ModelLimits[model].MaxModelLen; pinned != nil && *pinned > 0 {
-		return uint64(*pinned)
+	if l.MaxModelLen != nil && *l.MaxModelLen > 0 {
+		return uint64(*l.MaxModelLen)
 	}
 	return NoContextLength
 }
 
-// OutputTokenCap is the model's own max_tokens_cap, else the global one.
-func (l Limits) OutputTokenCap(model string) uint64 {
-	if perModel := l.ModelLimits[model].MaxTokensCap; perModel > 0 {
-		return uint64(perModel)
-	}
-	return uint64(max(l.MaxTokensCap, 0))
-}
-
 // RetirementReserve is what an escrow of the model must still afford, in the chain's reserve units: its context length as prompt bytes, never less than one capped answer. See capacity.md, "The balance floor".
-func (l Limits) RetirementReserve(model string, governedMaxModelLen uint64) uint64 {
-	return max(uint64(max(l.MaxTokensCap, 0)), filters.PromptBytesPerToken*l.ContextLength(model, governedMaxModelLen))
+func (l Limits) RetirementReserve(governedMaxModelLen uint64) uint64 {
+	return max(uint64(max(l.MaxTokensCap, 0)), filters.PromptBytesPerToken*l.ContextLength(governedMaxModelLen))
 }
 
-// OpenModels lists, sorted, the models any caller may reach without a key. See operations.md, "Who may call what".
-func (l Limits) OpenModels() []string {
+// OpenModels lists, sorted, the models any caller may reach without a key, and AllModels first when the network access is open. See operations.md, "Who may call what".
+func (c *Config) OpenModels() []string {
 	var open []string
-	for model, access := range l.ModelAccess {
-		if access == ModelAccessOpen {
+	if c.Limits.Access == ModelAccessOpen {
+		open = append(open, AllModels)
+	}
+	for _, model := range c.ModelNames() {
+		if c.models[model].Limits.Access == ModelAccessOpen {
 			open = append(open, model)
 		}
 	}
-	slices.Sort(open)
 	return open
 }
 
-// Offers reports whether the operator names the model in ModelAccess or ModelLimits. See operations.md, "Who may call what".
-func (l Limits) Offers(model string) bool {
-	if _, ok := l.ModelAccess[model]; ok {
-		return true
+// AccessTiers is the network access and every named model's access: what a caller's credentials can reach somewhere. See operations.md, "Who may call what".
+func (c *Config) AccessTiers() []string {
+	tiers := make([]string, 0, 1+len(c.models))
+	tiers = append(tiers, c.Limits.Access)
+	for _, effective := range c.models {
+		tiers = append(tiers, effective.Limits.Access)
 	}
-	_, ok := l.ModelLimits[model]
-	return ok
+	return tiers
 }
 
 // BlocksRequests folds relaxed PoC mode's override into the chain's raw blocking state. See root README.md, "Relaxed mode, in one place".

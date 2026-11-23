@@ -10,6 +10,7 @@ import (
 
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
@@ -65,6 +66,26 @@ func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Retry-After"); got != "1" {
 		t.Fatalf("Retry-After = %q, want a wait the client can act on", got)
+	}
+}
+
+// Test flow:
+//  1. Write `scheduler.ErrRequestCapped`, wrapped the way a dispatcher wraps it, through `writeErrorFor`.
+//  2. Assert the response status is 503 and the Retry-After header is "30", not the one second a busy shard gets.
+//  3. Assert the message is the overloaded text a client already knows, not the dispatcher's own.
+func TestARequestThatReachedItsCapIsAnsweredOverloadedAndToldToWaitThirtySeconds(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	newErrorsTestServer().writeErrorFor(recorder, fmt.Errorf("escrow e1: reached its cap: %w", scheduler.ErrRequestCapped))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "30" {
+		t.Fatalf("Retry-After = %q, want 30", got)
+	}
+	if got := detailForError(scheduler.ErrRequestCapped).Message; got != hostsOverloadedMessage {
+		t.Fatalf("message = %q, want %q", got, hostsOverloadedMessage)
 	}
 }
 
@@ -217,5 +238,33 @@ func TestAZeroLiveWeightRejectionCarriesTheHostCutoffBase(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Retry-After"); got != "5" {
 		t.Fatalf("Retry-After = %q, want %q (the default host cutoff base, rounded up to seconds)", got, "5")
+	}
+}
+
+// Test flow:
+//  1. Build a config whose network `host_cutoff_ms` is the default 5000 and whose model-a sets 9000.
+//  2. Write `engine.ErrHostsUnavailable` through `writeErrorForModel` for model-a and for an unnamed model, and through `writeErrorFor`.
+//  3. Assert the Retry-After headers are "9", "5" and "5".
+func TestAHostsUnavailableRetryAfterFollowsTheModelsOwnCutoff(t *testing.T) {
+	cutoff := int64(9000)
+	built, err := config.Build(env.Values{}, config.Overrides{Models: map[string]config.ModelSettings{"model-a": {HostCutoffMS: &cutoff}}})
+	if err != nil {
+		t.Fatalf("Build(): %v", err)
+	}
+	server := &Server{config: config.NewHolder(built)}
+
+	for _, expectation := range []struct {
+		model, want string
+	}{{"model-a", "9"}, {"model-b", "5"}} {
+		recorder := httptest.NewRecorder()
+		server.writeErrorForModel(recorder, engine.ErrHostsUnavailable, expectation.model)
+		if got := recorder.Header().Get("Retry-After"); got != expectation.want {
+			t.Fatalf("Retry-After for %s = %q, want %q", expectation.model, got, expectation.want)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	server.writeErrorFor(recorder, engine.ErrHostsUnavailable)
+	if got := recorder.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After on the network path = %q, want 5", got)
 	}
 }

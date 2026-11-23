@@ -16,8 +16,8 @@ Always on, with no level knob — a trace that ships off by default is not there
 
 | Line | Carries |
 | --- | --- |
-| `nonce committed` (emitted by `engine/pick.go`, written by `journal/render_race.go`) | request, escrow, nonce, participant, slot, role, and why this attempt started |
-| `attempt finished` (emitted by `engine/report.go`, written by `journal/render_race.go`) | the same identity, the terminal verdict, whether the nonce was finished, whether the host diverged on state, and each deadline its host was narrowed for (`missed_receipt_deadline`, `missed_first_token_deadline`) |
+| `nonce committed` (emitted by `engine/pick.go`, written by `journal/render_race.go`) | request, escrow, nonce, participant, slot, role, why this attempt started, and the two sizes its reserve is made of: `input_bytes` (the body length the host checks as `input_length`) and `max_tokens`; the chain reserves `(input_bytes + max_tokens) × token_price + fee_per_nonce` for the nonce |
+| `attempt finished` (emitted by `engine/report.go`, written by `journal/render_race.go`) | the same identity, the terminal verdict, the host's `usage_tokens` and `usage_prompt_tokens` as its stream reported them (what the chain charges is `(prompt + completion) × token_price`, never more than the reserve), whether the nonce was finished, whether the host diverged on state, and each deadline its host was narrowed for (`missed_receipt_deadline`, `missed_first_token_deadline`) |
 | `served winner finish landed` (emitted by `engine/winner_sample.go`, written by `journal/render_race.go`) | request, escrow, nonce and participant of a winner whose nonce was still open when its stream ended, once its Finish is seen, with `finish_lag_ms` from the attempt's end ([race.md](./race.md), "A served winner's sample waits for its finish") |
 | `nonce stranded` (emitted by `engine/race.go`, written by `journal/render_race.go`) | **Warn** — a committed nonce nobody will answer for; the shape every recurring settlement defect takes |
 
@@ -36,9 +36,10 @@ Three mechanisms withhold work from a host, each on its own trigger, and each is
 | Line | Trigger | Carries |
 | --- | --- | --- |
 | `host withheld from routing` (`perf/tracker.go`) | five failures in a row, or a failure rate from 15% over a volume from 20 | **Warn** — which trigger fired, the rung, the run length, the rate and its volume that tripped it, and how long the withholding lasts |
-| `host back in routing` (`perf/tracker.go`) | first sample after the withholding lapsed | the rung it decayed to |
+| `host back in routing` (`perf/tracker.go`) | first sample after the withholding lapsed, or the epoch boundary cleared it | the rung it decayed to |
 | `host cut off after transport faults` (`limits/reaction.go`) | three cut-off faults in a row — a transport fault, an empty answer that left its nonce open, or a `429`/`503` from a host that carried nothing else of ours for this model when it refused — or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts. The line's name and its `consecutive_transport_faults` reason are what dashboards and log queries match on, so both keep the wording they have whatever the run was made of |
-| `host back after its cut-off` (`limits/reaction.go`) | the probe answered | the backoff depth it decayed to |
+| `host back after its cut-off` (`limits/reaction.go`) | the probe answered, or the epoch boundary closed the cut-off | the backoff depth it decayed to |
+| `host stats reset at epoch` (`app/epoch_reset.go`) | the effective epoch rose | the epoch, the pairs the windows held, how many hosts were withheld and how many cut off |
 | `host denied the crown` (`engine/crown_strikes.go`) | three content-free answers in a row | **Warn** — the strike count. The host keeps drawing nonces and starts a second attempt beside itself, so this is a spend, not only a quality signal |
 | `host crowned again` (`engine/crown_strikes.go`) | one answer with content | — |
 
@@ -52,6 +53,7 @@ One more line belongs to the same family, on the money side rather than the rout
 | --- | --- |
 | `api_key_id` | the client API key the request was made with: the first eight hex characters of the key's SHA-256 (`printf %s "$KEY" \| sha256sum \| cut -c1-8`), `admin` for the admin key, `none` when no configured client key matched (no key or an unknown one). The limiter's refusal line carries it too, so one key's share of the traffic and of the refusals can be read from the log |
 | `escrow` | the escrow the race ran on; absent when no escrow was picked |
+| `input_tokens` / `input_tokens_source` | the gateway's own prompt count and where it came from (`tokenizer_exact`, `tokenizer_sampled` or `bytes_estimate`), so a log answers whether the tokenizer counted a request |
 | `host` / `hosts` | `host` is the crowned attempt's host; with nobody crowned, `hosts` lists every host tried, comma-separated; a race that ran no attempt carries neither |
 | `bytes` | how much actually reached the client, counted at the socket — the strip rewrites events on the way out |
 | `terminated` | whether the SSE terminator went with them; without it a client waits out its own timeout on a reply it already has |
@@ -81,7 +83,7 @@ The record carries no request or response body — capture files exist for that,
 | `regular escrows promoted to temp` | the bridge funded fewer temps than `temp_count` — no room under `max_unsettled`, a model the network does not serve, or a failed create — so the regulars keep serving as temps instead of being retired; `rotation_status.create_error` names the cause (`bridge funded fewer temps than temp_count` for a partial fill) |
 | `escrow parked at its settlement deadline` / `escrow deadline passes unsettled` / `settle margin shorter than two settle windows` / `escrow deadlines read past a stale chain height` | an escrow came within `rotation.settle_margin_blocks` of `settle_by`, the switch block by which its chain epoch must settle, and was parked; a row inside its margin that nothing is allowed to settle, or whose deadline has passed (Error, with `reason`: `settlement_disabled`, `operator_deactivated`, `key_missing`, `deadline_passed`; once per row while it lasts; `settle_by` is left out once the switch block is no longer known, as on `deadline_passed`), a margin shorter than two settle windows at the measured block time, and a chain snapshot older than `chain_snapshot_max_age_seconds` whose deadlines are read at `projected_height` (`height` plus `stale_for_ms` over the measured block time, or one block a second), once per episode |
 | `escrow funding planned` / `funding guarantee broken` / `model amount cannot fund a full escrow` / `escrow budget reached` | the funding planner's decision for a model and the start of each episode. Progress lane, so a backlog may drop them |
-| `nonce burned for nobody` (`journal/render_money.go`) | a committed nonce that will serve nobody, with the escrow and the reason, and under `burned_during_request` the request it was spent during |
+| `nonce burned for nobody` (`journal/render_money.go`) | a committed nonce that will serve nobody, with the escrow and the reason, and under `burned_during_request` the request it was charged to, when there is one |
 | `a host stopped mid-answer: reply served, not cached` (`journal/render_request.go`) | a reply served as an answer never reached a terminal `finish_reason`, so nothing replays it. An answer whose host closed the stream with neither `[DONE]` nor a finished nonce never gets here: it is a failed request, a 502 with an error body when buffered and an error event with no `[DONE]` when streamed (`engine/failure.go`, `ErrAnswerTruncated`). This line names the rest, a reply the host terminated or finished without a terminal reason, and only one the cache would otherwise have stored: with `chat_cache_max_bytes` at 0, for a body past the per-entry bound, or when the client had already left, it still passes unnamed |
 | `escrow stopped burning nonces at its budget` | the escrow now queues callers rather than spending on requests it cannot serve |
 | `escrow warmed` / `escrow warmup voted on its unfinished nonce` | a new escrow's group was taught the escrow, and the probe's own nonce was settled; the vote line is **Warn** when the vote failed, and `catch_up_error` appears only when the catch-up failed |
@@ -90,12 +92,12 @@ The record carries no request or response body — capture files exist for that,
 | `host blocked for state divergence` (`journal/render_race.go`) | the block does not lift while the process runs and no metric exposes it — "why is this host never picked" is answerable only here |
 | `chain snapshot stale` / `chain snapshot recovered` | written on the **edge** only; a failed refresh keeps routing on the previous participants until the last poll that read the epoch and the participants passes `chain_snapshot_max_age_seconds`, after which requests are refused 503. The nonce-ceiling and preserved-set reads fall back within the poll and do not hold that clock back |
 | `chain epoch` / `chain blocked requests` / `chain unblocked requests` | written on the **edge** only: `phaseNarrator` (`app/observers.go`) decides the change and the journal writes it; a snapshot that carries no epoch — a first poll that failed — announces none |
-| `models are open` (`app/compose.go`) | written at boot and after every config change while any `model_access` entry is `open`; `open_models` names the models any caller reaches without a key, each spending the escrows that serve it |
+| `models are open` (`app/compose.go`) | written at boot and after every config change while the network `access` or any model's `access` is `open`; `open_models` names the models any caller reaches without a key (`*` first when the network `access` is open), each spending the escrows that serve it |
 | `admin request failed` / `admin request refused` (`api/errors.go`) | the operator mutation lines are written on the successful path only, so a failed operator action would otherwise be invisible |
 
 `escrow` is always the escrow id as text. The chain carries the id behind `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` as a number, and `escrow/` and `chain/` convert it to text before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
 
-Admin lines carry the action and its subject, **never the request body** — an override payload can hold the admin key. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
+Admin lines carry the action and its subject, **never a request body and never a key value**. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
 
 ## Metrics
 
@@ -207,6 +209,7 @@ How each escrow reaches its hosts is in two series: `devshard_gateway_escrow_ses
 | --- | --- |
 | what is routable, and the config in force | `GET /v1/admin/state` |
 | the stored admin overrides, as a `PUT` would write them back | `GET /v1/admin/settings` |
+| the client API keys, without their values | `GET /v1/admin/api-keys` |
 | every escrow row the process owns | `GET /v1/admin/devshards` |
 | the full participant keys to paste into a `participants` list | `GET /v1/admin/hosts` — never a log line's short host label, which is the last eight characters and matches nobody |
 | rotation's last outcome per model | `GET /v1/debug/rotation` |

@@ -67,9 +67,9 @@ func markedShadow(shadow []string) func(participant string) bool {
 	return func(participant string) bool { return named[participant] }
 }
 
-func (s *Scheduler) participants() config.Participants {
+func (s *Scheduler) participants(model string) config.Participants {
 	if s.settings == nil {
 		return config.Participants{}
 	}
-	return s.settings.Load().Scheduler.Participants
+	return s.settings.Load().For(model).Scheduler.Participants
 }

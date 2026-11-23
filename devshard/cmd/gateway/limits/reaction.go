@@ -33,6 +33,26 @@ func (l *ParticipantLimiter) ClearQuarantine(participant string) bool {
 	return cleared
 }
 
+// ResetAll reopens every pair's windows at their initial size and closes every cut-off, keeping the tokens still in flight, and reports the pairs reset and how many were cut off; a result of an attempt launched before it is dropped by OnResult. See README.md, "The cut-off, the peek and the sweep".
+func (l *ParticipantLimiter) ResetAll() (pairs, cutOff int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.resetAt = l.now()
+	for tracked, state := range l.states {
+		state.input.reopen(state.bounds.Input.Initial)
+		state.output.reopen(state.bounds.Output.Initial)
+		if !state.openUntil.IsZero() {
+			cutOff++
+			if l.narrator != nil {
+				l.narrator.HostCutOffLifted(tracked.participant, tracked.model, state.backoffCount)
+			}
+		}
+		state.clearBreaker()
+	}
+	return len(l.states), cutOff
+}
+
 func cutoffReason(halfOpen bool) string {
 	if halfOpen {
 		return cutoffReasonProbeFailed
@@ -50,28 +70,36 @@ func (l *ParticipantLimiter) OnResult(result Result) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if launchedBefore(result.LaunchedAt, l.resetAt) {
+		return
+	}
 	state := l.stateLocked(key{participant: result.Participant, model: result.Model})
 	now := l.now()
 	state.lastUsed = now
+	settings := l.cfg.forModel(result.Model)
 
 	narrowingTier, blamed := answer.tier, answer.dimension
 	if narrowingTier == tierNone && result.Verdict == Success {
-		if congested := result.Pressure.congestedDimension(l.cfg.Slack); congested != dimensionNone {
+		if congested := result.Pressure.congestedDimension(settings.Slack); congested != dimensionNone {
 			narrowingTier, blamed = tierSoft, congested
 		} else {
 			l.growLocked(state, result.Carried)
 		}
 	}
-	if by := l.cfg.Factors.narrowingFor(narrowingTier, blamed); by.moves() {
+	if by := settings.Factors.narrowingFor(narrowingTier, blamed); by.moves() {
 		l.narrowLocked(state, by)
 	}
 	l.applyBreakerLocked(state, answer.breaker, result.Participant, result.Model, now)
 }
 
-// CountRefusalIfIdle counts a refusal towards the cut-off when the host carries nothing else of ours for this model. See README.md, "What blames which window".
-func (l *ParticipantLimiter) CountRefusalIfIdle(participant, model string) {
+// CountRefusalIfIdle counts a refusal towards the cut-off when the host carries nothing else of ours for this model and the attempt was launched after the last reset. See README.md, "What blames which window".
+func (l *ParticipantLimiter) CountRefusalIfIdle(participant, model string, launchedAt time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if launchedBefore(launchedAt, l.resetAt) {
+		return
+	}
 
 	state := l.stateLocked(key{participant: participant, model: model})
 	now := l.now()
@@ -104,11 +132,12 @@ func (l *ParticipantLimiter) applyBreakerLocked(state *hostState, effect breaker
 			l.narrator.HostCutOffLifted(participant, model, state.backoffCount)
 		}
 	case breakerCounts:
-		if !state.recordCutoffFault(now, int(l.cfg.AfterFailures)) {
+		settings := l.cfg.forModel(model)
+		if !state.recordCutoffFault(now, int(settings.AfterFailures)) {
 			return
 		}
-		capped := min(time.Duration(float64(l.cfg.BaseOpen)*math.Pow(cutoffBackoffMultiplier, float64(state.backoffCount))), l.cfg.MaxOpen)
-		reason := state.openBreaker(now.Add(capped+l.jitter(capped)), capped < l.cfg.MaxOpen)
+		capped := min(time.Duration(float64(settings.BaseOpen)*math.Pow(cutoffBackoffMultiplier, float64(state.backoffCount))), settings.MaxOpen)
+		reason := state.openBreaker(now.Add(capped+l.jitter(capped)), capped < settings.MaxOpen)
 		if l.narrator != nil {
 			l.narrator.HostCutOff(participant, model, reason, state.backoffCount, state.openUntil.Sub(now))
 		}

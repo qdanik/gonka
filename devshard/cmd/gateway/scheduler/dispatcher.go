@@ -38,8 +38,9 @@ type dispatcherDeps struct {
 	observer            dispatchObserver
 	shadow              ShadowProber
 	now                 func() time.Time
-	matchWait           time.Duration
+	matchWait           func() time.Duration
 	maxConsecutiveBurns func() int64
+	maxBurnsPerRequest  func() int64
 	retirementReserve   func() uint64
 	newTimer            func(time.Duration) (<-chan time.Time, func())
 	retire              func(*dispatcher) bool
@@ -83,8 +84,14 @@ func newDispatcher(deps dispatcherDeps) *dispatcher {
 	if deps.holdEscrow == nil {
 		deps.holdEscrow = func() (func(), bool) { return nil, true }
 	}
+	if deps.matchWait == nil {
+		deps.matchWait = func() time.Duration { return 0 }
+	}
 	if deps.maxConsecutiveBurns == nil {
 		deps.maxConsecutiveBurns = func() int64 { return 0 }
+	}
+	if deps.maxBurnsPerRequest == nil {
+		deps.maxBurnsPerRequest = func() int64 { return BurnCapOff }
 	}
 	if deps.retirementReserve == nil {
 		deps.retirementReserve = func() uint64 { return 0 }

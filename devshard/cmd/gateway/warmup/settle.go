@@ -44,6 +44,12 @@ func (v Voter) Settle(ctx context.Context, escrowID, model string, params user.I
 		})
 		return engine.TimeoutEvent{}, false
 	}
+	if !poster.Voteable(nonce) {
+		unvoteable := event
+		unvoteable.Action, unvoteable.Reason = engine.TimeoutActionSkipped, engine.TimeoutReasonUnvoteable
+		v.recordTimeout(unvoteable)
+		return unvoteable, true
+	}
 	v.recordTimeout(event)
 
 	posted = event
@@ -52,6 +58,13 @@ func (v Voter) Settle(ctx context.Context, escrowID, model string, params user.I
 		step.Pace = v.Pace.Wait
 	}
 	vote, err := poster.SettleTimeout(ctx, step)
+	for vote.Deferred {
+		if err = waitUntil(ctx, poster.VoteDeadline(nonce, step.StartedAt)); err != nil {
+			vote = engine.TimeoutVote{}
+			break
+		}
+		vote, err = poster.SettleTimeout(ctx, step)
+	}
 	posted.Action, posted.Reason = engine.TimeoutOutcome(vote, err, false)
 	v.recordTimeout(posted)
 	return posted, true
@@ -68,5 +81,16 @@ func (w *Prober) settleUnfinishedProbe(ctx context.Context, escrowID, model stri
 	posted, voted := Voter{Posters: w.posters, Timeouts: w.timeouts}.Settle(ctx, escrowID, model, params, nonce, acknowledged)
 	if voted && w.narrator != nil {
 		w.narrator.WarmupVoted(escrowID, nonce, posted.Action, posted.Reason)
+	}
+}
+
+func waitUntil(ctx context.Context, deadline time.Time) error {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
