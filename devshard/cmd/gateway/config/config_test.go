@@ -190,10 +190,6 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"host_cutoff_max_ms above perf ejection horizon", func(c *Config) { c.Limits.HostCutoff.MaxMS = c.Perf.EjectionMaxSeconds*1000 + 1 }, "dominant ejection authority"},
 		{"access bad enum", func(c *Config) { c.Limits.Access = "bogus" }, "access"},
 		{"admin_api_key too short to be safe", func(c *Config) { c.Server.AdminAPIKey = "short" }, "admin_api_key"},
-		{"api_key model with no api keys configured", func(c *Config) {
-			c.Limits.Access = ModelAccessAPIKey
-			c.Server.APIKeys = nil
-		}, "api_keys"},
 		{"poc_mode bad enum", func(c *Config) { c.Modes.PoCMode = "bogus" }, "poc_mode"},
 		{"rotation_pre_poc_blocks negative", func(c *Config) { c.Rotation.PrePoCBlocks = -1 }, "rotation_pre_poc_blocks"},
 		{"chat_cache_max_bytes negative", func(c *Config) { c.Cache.ChatCacheMaxBytes = -1 }, "chat_cache_max_bytes"},

@@ -38,10 +38,9 @@ These variables have no working default:
 | Variable | What it is |
 | --- | --- |
 | `DEVSHARD_CHAIN_RPC`, `DEVSHARD_CHAIN_GRPC`, `DEVSHARD_CHAIN_ID`, `DEVSHARD_PUBLIC_API` | the chain the gateway reads and broadcasts to. A wrong `DEVSHARD_CHAIN_ID` invalidates every transaction it signs. The gateway runs with `DEVSHARD_CHAIN_GRPC` unreachable as long as `DEVSHARD_CHAIN_RPC` points at a live CometBFT RPC |
-| `DEVSHARD_API_KEYS` | the keys clients present, each at least 16 characters, for the models whose `access` is `api_key` |
-| `DEVSHARD_ADMIN_API_KEY` | the admin key. Empty disables the admin routes entirely, including creating escrows and setting `access` |
+| `DEVSHARD_ADMIN_API_KEY` | the admin key. Empty disables the admin routes entirely, including creating escrows, setting `access` and creating client keys |
 
-A fresh gateway serves no client until the operator sets `access` for a model under `models`: a model with no `access` of its own answers only the admin key ([`docs/operations.md`](../docs/operations.md), "Who may call what").
+Client keys are not an environment setting: after the first start, create each with `POST /v1/admin/api-keys` for the models whose `access` under `models` (or the network `access`) is `api_key`. A fresh gateway serves no client until the operator sets `access` for a model under `models` and, for an `api_key` model, creates a key: a model with no `access` of its own answers only the admin key ([`docs/operations.md`](../docs/operations.md), "Who may call what", "Client API keys").
 
 ## Signing keys are named, never pasted
 

@@ -3,22 +3,18 @@ package config
 import (
 	"cmp"
 	"slices"
-	"strings"
 
 	"devshard/cmd/gateway/env"
 )
 
-// Build produces the validated snapshot: Defaults() ← env ← admin overrides, cloning every input map and slice.
-func Build(values env.Values, overrides Overrides) (*Config, error) {
+// Build produces the validated snapshot: Defaults() ← env ← admin overrides, with the active client keys, cloning every input map and slice.
+func Build(values env.Values, overrides Overrides, clientKeys ...string) (*Config, error) {
 	configuration := Defaults()
 
 	// Environment layer.
 	applyTunables(&configuration, values.Tunables)
 	overrideIfSet(&configuration.Server.Port, values.Port)
 	overrideIfSet(&configuration.Server.StorageDir, values.StorageDir)
-	if values.APIKeys != nil {
-		configuration.Server.APIKeys = splitCommaSeparated(*values.APIKeys)
-	}
 	overrideIfSet(&configuration.Server.AdminAPIKey, values.AdminAPIKey)
 	overrideIfSet(&configuration.Server.DevshardsJSON, values.DevshardsJSON)
 	overrideIfSet(&configuration.Server.MaxConcurrentRuntimeBuilds, values.MaxConcurrentRuntimeBuilds)
@@ -95,6 +91,8 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.HostCutoff.MaxMS, overrides.HostCutoffMaxMS)
 	overrideIfSet(&configuration.Limits.Access, overrides.Access)
 
+	configuration.Server.APIKeys = slices.Clone(clientKeys)
+
 	if err := configuration.Validate(); err != nil {
 		return nil, err
 	}
@@ -109,19 +107,6 @@ func overrideIfSet[T any](target, source *T) {
 	if source != nil {
 		*target = *source
 	}
-}
-
-// splitCommaSeparated trims, drops empties, and always returns a fresh slice (no clone needed).
-func splitCommaSeparated(raw string) []string {
-	parts := strings.Split(raw, ",")
-	cleaned := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed != "" {
-			cleaned = append(cleaned, trimmed)
-		}
-	}
-	return cleaned
 }
 
 func applyTunables(configuration *Config, tunables env.Tunables) {

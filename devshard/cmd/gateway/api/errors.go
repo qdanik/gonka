@@ -23,6 +23,7 @@ import (
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/cmd/gateway/store"
 	"devshard/logging"
 	"devshard/transport"
 	"devshard/types"
@@ -42,6 +43,10 @@ var (
 	ErrUnknownDevshard = errors.New("unknown devshard")
 
 	ErrUnknownParticipant = errors.New("unknown participant")
+
+	ErrUnknownAPIKey = errors.New("unknown API key")
+
+	ErrLastAPIKey = errors.New("the last active API key cannot be revoked while a model is api_key")
 
 	ErrPrivateKeyEnvRequired = errors.New("private_key_env is required; a raw private_key is not accepted")
 
@@ -190,9 +195,9 @@ func statusForError(err error) int {
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrPrivateKeyEnvRequired), errors.Is(err, ErrInvalidEscrowID), errors.Is(err, config.ErrInvalid), errors.Is(err, escrow.ErrAmountBelowFloor):
 		return http.StatusBadRequest
-	case errors.Is(err, ErrDevshardNotActivatable):
+	case errors.Is(err, ErrDevshardNotActivatable), errors.Is(err, store.ErrAPIKeyIDTaken), errors.Is(err, ErrLastAPIKey):
 		return http.StatusConflict
-	case errors.Is(err, ErrUnknownDevshard), errors.Is(err, ErrUnknownParticipant):
+	case errors.Is(err, ErrUnknownDevshard), errors.Is(err, ErrUnknownParticipant), errors.Is(err, ErrUnknownAPIKey):
 		return http.StatusNotFound
 	case errors.Is(err, escrow.ErrEscrowPruned), errors.Is(err, escrow.ErrEscrowSettledOnChain):
 		return http.StatusGone

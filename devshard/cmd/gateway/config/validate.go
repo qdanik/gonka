@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/filters"
@@ -46,8 +47,27 @@ const (
 	maxMatchWaitMS = 5_000
 )
 
-// ErrInvalid marks a configuration the operator got wrong, so the surface answers 400 rather than 502.
-var ErrInvalid = errors.New("invalid configuration")
+// ErrInvalid marks a configuration the operator got wrong, so the surface answers 400 rather than 502; ErrAPIKeyModelWithoutKey marks a model on the api_key tier while no client key is active.
+var (
+	ErrInvalid               = errors.New("invalid configuration")
+	ErrAPIKeyModelWithoutKey = errors.New("access marks a model api_key but no client API key is active, so it is unreachable")
+)
+
+// CheckClientKeys returns ErrAPIKeyModelWithoutKey when a model is on the api_key tier and no client key is active.
+func (c *Config) CheckClientKeys() error {
+	if len(c.Server.APIKeys) > 0 {
+		return nil
+	}
+	if c.Limits.Access == ModelAccessAPIKey {
+		return ErrAPIKeyModelWithoutKey
+	}
+	for _, effective := range c.models {
+		if effective.Limits.Access == ModelAccessAPIKey {
+			return ErrAPIKeyModelWithoutKey
+		}
+	}
+	return nil
+}
 
 // Validate reports every problem at once, naming fields in the admin-API snake_case spelling.
 func (c *Config) Validate() error {
@@ -204,12 +224,15 @@ func (c *Config) validateAccess(complain func(format string, args ...any)) {
 		if len(key) < minAPIKeyLength {
 			complain("api_keys[%d]: must be at least %d characters", index, minAPIKeyLength)
 		}
+		if strings.ContainsFunc(key, unicode.IsSpace) {
+			complain("api_keys[%d]: must not contain whitespace, since no Bearer header can carry it", index)
+		}
+		if c.Server.AdminEnabled() && key == c.Server.AdminAPIKey {
+			complain("api_keys[%d]: must differ from the admin key", index)
+		}
 	}
 	if c.Limits.Access != ModelAccessOpen && c.Limits.Access != ModelAccessAPIKey && c.Limits.Access != ModelAccessAdminOnly {
 		complain("access: %q is not open, api_key or admin_only", c.Limits.Access)
-	}
-	if c.Limits.Access == ModelAccessAPIKey && len(c.Server.APIKeys) == 0 {
-		complain("api_keys: access marks the model api_key but no api keys are configured, so it is unreachable")
 	}
 	if pinned := c.Limits.MaxModelLen; pinned != nil && (*pinned < 1 || *pinned > MaxContextTokens) {
 		complain("max_model_len: %d must be between 1 and %d", *pinned, MaxContextTokens)

@@ -96,7 +96,7 @@ The record carries no request or response body — capture files exist for that,
 
 `escrow` is always the escrow id as text. The chain carries the id behind `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` as a number, and `escrow/` and `chain/` convert it to text before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
 
-Admin lines carry the action and its subject, **never the request body** — an override payload can hold the admin key. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
+Admin lines carry the action and its subject, **never a request body and never a key value**. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
 
 ## Metrics
 
@@ -207,6 +207,7 @@ How each escrow reaches its hosts is in two series: `devshard_gateway_escrow_ses
 | --- | --- |
 | what is routable, and the config in force | `GET /v1/admin/state` |
 | the stored admin overrides, as a `PUT` would write them back | `GET /v1/admin/settings` |
+| the client API keys, without their values | `GET /v1/admin/api-keys` |
 | every escrow row the process owns | `GET /v1/admin/devshards` |
 | the full participant keys to paste into either routing list | `GET /v1/admin/hosts` — never a log line's short host label, which is the last eight characters and matches nobody |
 | rotation's last outcome per model | `GET /v1/debug/rotation` |

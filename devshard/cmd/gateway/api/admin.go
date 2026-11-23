@@ -96,7 +96,7 @@ func (s *Server) settingsToApply(r *http.Request, body []byte) (overrides config
 	return overrides, parseErr, nil
 }
 
-// auditAdmin carries the action and its subject, never the body: an override payload can hold the admin key.
+// auditAdmin carries the action and its subject, never a request body and never a key value.
 func auditAdmin(action string, fields ...any) {
 	logging.Info("admin: "+action, fields...)
 }

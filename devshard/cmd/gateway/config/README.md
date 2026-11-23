@@ -6,7 +6,7 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 
 ## What it owns
 
-- **`Build`** — merges three layers in a fixed order: defaults, then environment, then the operator's stored overrides. It clones every map and slice it takes from its inputs, so nothing it returns shares memory with its sources.
+- **`Build`** — merges three layers in a fixed order: defaults, then environment, then the operator's stored overrides, and takes the active client keys as its last argument: they come from the store's `api_keys` table, never from the environment. It clones every map and slice it takes from its inputs, so nothing it returns shares memory with its sources.
 - **`Defaults`** — the single source of every default value.
 - **`Validate`** — fail-fast checks at startup; an unsafe combination is refused rather than discovered later.
 - **`Holder`** — an atomic holder that publishes a whole replacement snapshot and notifies subscribers. Readers take a pointer and are never torn.
@@ -48,8 +48,8 @@ Four accessors carry rules of their own. `Server.AdminEnabled` is what callers m
 
 Most checks are ordinary range bounds. These are the ones that exist because a legal-looking pair is unsafe:
 
-- `admin_api_key` must be at least 16 characters when set. A key short enough to guess is worse than none, because "none" disables admin entirely while a weak one authenticates. Every entry of `api_keys` is held to the same 16, since a short client key spends the operator's escrows for whoever guesses it.
-- `api_keys` must be non-empty once the network `access` or any model's `access` is `api_key`, or that model is configured to be unreachable.
+- `admin_api_key` must be at least 16 characters when set. A key short enough to guess is worse than none, because "none" disables admin entirely while a weak one authenticates. Every entry of `api_keys` is held to the same 16, since a short client key spends the operator's escrows for whoever guesses it. A database client key must contain no whitespace, because no `Bearer` header can carry it, and must differ from the admin key, or a client request would be admitted with admin rights.
+- `CheckClientKeys` refuses a network or per-model `access` of `api_key` while no client key is active, or that model is configured to be unreachable. `Validate` does not run it: a gateway with no keys must still boot to accept the first one, so boot logs a warning and only a key revoke or a settings write is refused.
 - `host_cutoff_max_ms` must not exceed `perf_ejection_max_seconds`, so [`perf`](../perf/) stays the dominant ejection authority rather than the per-host cutoff.
 - `engine_loser_grace_ms` must be at least `engine_inter_chunk_stall_ms`. A loser is cancelled at the grace, so a grace under the stall window kills attempts that are merely between chunks — before the gateway would even call such a stream stalled.
 - `match_wait_ms` is capped at 5000. A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a budget guard, not a taste judgement.

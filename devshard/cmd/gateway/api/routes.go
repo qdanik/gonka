@@ -66,6 +66,8 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/admin/devshards/{id}/settle", label: "/v1/admin/devshards/{id}/settle", admin: true, alwaysOn: true, handler: s.handleAdminDevshardSettle},
 		{pattern: "/v1/admin/devshards/{id}/participants", label: "/v1/admin/devshards/{id}/participants", admin: true, alwaysOn: true, handler: s.handleAdminDevshardParticipants},
 		{pattern: "/v1/admin/escrows", label: "/v1/admin/escrows", admin: true, alwaysOn: true, handler: s.handleAdminEscrows},
+		{pattern: "/v1/admin/api-keys", label: "/v1/admin/api-keys", admin: true, alwaysOn: true, handler: s.handleAdminAPIKeys},
+		{pattern: "/v1/admin/api-keys/{id}", label: "/v1/admin/api-keys/{id}", admin: true, alwaysOn: true, handler: s.handleAdminAPIKey},
 		{pattern: "/v1/admin/suspicious-hosts", label: "/v1/admin/suspicious-hosts", admin: true, alwaysOn: true, handler: s.handleAdminSuspiciousHosts},
 		{pattern: "/v1/admin/filters", label: "/v1/admin/filters", admin: true, alwaysOn: true, handler: s.handleAdminFilters},
 		{pattern: "/v1/admin/filters/presets", label: "/v1/admin/filters/presets", admin: true, alwaysOn: true, handler: s.handleAdminFilterPresets},

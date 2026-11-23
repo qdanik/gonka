@@ -173,8 +173,7 @@ func TestAModelNoListNamesIsRefusedOnlyWhenAListIsVisible(t *testing.T) {
 //  2. Assert an unnamed model resolves to the network access, never to a nil config, and the named model to its own.
 func TestForAnUnnamedModelIsTheNetworkConfig(t *testing.T) {
 	open, keyed := ModelAccessOpen, ModelAccessAPIKey
-	keys := "a-client-key-of-reasonable-length"
-	built, err := Build(env.Values{APIKeys: &keys}, Overrides{Access: &open, Models: map[string]ModelSettings{"model-a": {Access: &keyed}}})
+	built, err := Build(env.Values{}, Overrides{Access: &open, Models: map[string]ModelSettings{"model-a": {Access: &keyed}}}, "a-client-key-of-reasonable-length")
 	if err != nil {
 		t.Fatalf("Build() = %v", err)
 	}
