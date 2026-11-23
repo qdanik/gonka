@@ -1,6 +1,6 @@
 # `shadow` — probing the participants that serve no client
 
-A participant named in `participants.shadow` receives inference probes and never a client request. This package sends those probes and settles the nonces they are sent on.
+A participant named in `participants.shadow`, or in a model's own `models.<id>.participants.shadow`, receives inference probes on that model and never a client request there. This package sends those probes and settles the nonces they are sent on.
 
 ## What it owns
 

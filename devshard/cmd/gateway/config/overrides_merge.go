@@ -66,7 +66,15 @@ func mergedModels(stored map[string]ModelSettings, patch json.RawMessage) (map[s
 			return nil, fmt.Errorf("parsing models[%s] patch: %w", model, err)
 		}
 		settings := merged[model]
+		storedParticipants := settings.Participants
 		replaceNamedFields(reflect.ValueOf(&settings).Elem(), reflect.ValueOf(changes), fields)
+		if changes.Participants != nil {
+			participants, err := storedParticipants.merged(*changes.Participants, fields[participantsKey])
+			if err != nil {
+				return nil, fmt.Errorf("models[%s]: %w", model, err)
+			}
+			settings.Participants = participants
+		}
 		merged[model] = settings
 	}
 	return merged, nil
