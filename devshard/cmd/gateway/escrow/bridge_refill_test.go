@@ -2,6 +2,7 @@ package escrow
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -222,28 +223,37 @@ func TestTheBridgeTakesTheDecisionsRefillOnceWithoutSpendingTheBucket(t *testing
 	require.Equal(t, fresh.Available(), planner.models["qwen"].bucket.Available(), "bucket tokens left")
 }
 
-// Test flow:
-//  1. Build a planning manager in the bridge window with two temps of the bridge label, the full temp count, each holding less than a slot, and a chain that reports every new escrow at the model's amount.
-//  2. Tick once, so the planner reads the drained temps, then tick twice more.
-//  3. Assert the first tick created nothing, the second created two temps, the two full escrows the guarantee wants, and the third created nothing: the new temps' stored amounts cover the shortfall.
-func TestDrainedTempsInTheBridgeWindowAreRefilledOnceAcrossTicks(t *testing.T) {
+func drainedBridgeManager(t *testing.T, tempCount int, mutate func(snapshot *chain.PhaseSnapshot, cfg *config.Config)) (*Manager, *fakeTxClient, *fakeStore) {
+	t.Helper()
 	testStore := newFakeStore()
 	snapshot := planningSnapshot()
 	snapshot.EpochSwitchBlockHeight, snapshot.FullWeightsByModel = snapshot.BlockHeight+200, map[string]map[string]float64{"qwen": {"participant": 1}}
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = true
-	cfg.Rotation.ModelsJSON = `[{"model_id":"qwen","target_count":1,"temp_count":2,"reserve_count":0,"amount":1000000,"private_key_env":"K"}]`
+	cfg.Rotation.ModelsJSON = fmt.Sprintf(`[{"model_id":"qwen","target_count":1,"temp_count":%d,"reserve_count":0,"amount":1000000,"private_key_env":"K","max_unsettled":10}]`, tempCount)
+	mutate(&snapshot, &cfg)
 	txClient := &fakeTxClient{createEscrowFn: succeedingCreateEscrowFn(800)}
 	deps := testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg)
 	deps.ChainFacts = &fakeTxClient{getEscrowFn: func(_ context.Context, escrowID string) (chain.EscrowInfo, bool, error) {
 		return chain.EscrowInfo{EscrowID: escrowID, EpochIndex: 7, Balance: 1_000_000}, true, nil
 	}}
 	drained := EscrowMoney{Config: types.SessionConfig{RefusalTimeout: 60, ExecutionTimeout: 1800}, Balance: 40_000, TokenPrice: 1, FeePerNonce: 10}
-	deps.Funds = fakeFunds{"1": drained, "2": drained}
-	for _, escrowID := range []string{"1", "2"} {
+	funds := fakeFunds{}
+	deps.Funds = funds
+	for index := 1; index <= tempCount; index++ {
+		escrowID := fmt.Sprint(index)
+		funds[escrowID] = drained
 		testStore.devshards[escrowID] = store.DevshardRecord{EscrowID: escrowID, Model: "qwen", Active: true, RotationRole: roleTemp, RotationEpoch: 8, PrivateKeyEnv: "K", Amount: 1_000_000}
 	}
-	manager := mustManager(t, deps)
+	return mustManager(t, deps), txClient, testStore
+}
+
+// Test flow:
+//  1. Build a planning manager in the bridge window with two temps of the bridge label, the full temp count, each holding less than a slot, and a chain that reports every new escrow at the model's amount.
+//  2. Tick once, so the planner reads the drained temps and the bridge refills them in the same tick, then tick twice more.
+//  3. Assert the first tick created two temps, the two full escrows the guarantee wants, and the second and third created nothing: the new temps' stored amounts cover the shortfall.
+func TestDrainedTempsInTheBridgeWindowAreRefilledOnceAcrossTicks(t *testing.T) {
+	manager, txClient, _ := drainedBridgeManager(t, 2, func(*chain.PhaseSnapshot, *config.Config) {})
 
 	require.NoError(t, manager.tick(context.Background()))
 	afterFirst := txClient.createCalls
@@ -251,7 +261,43 @@ func TestDrainedTempsInTheBridgeWindowAreRefilledOnceAcrossTicks(t *testing.T) {
 	afterSecond := txClient.createCalls
 	require.NoError(t, manager.tick(context.Background()))
 
-	require.Zero(t, afterFirst, "creates after the first tick")
+	require.Equal(t, 2, afterFirst, "creates after the first tick")
 	require.Equal(t, 2, afterSecond, "creates after the second tick")
 	require.Equal(t, 2, txClient.createCalls, "creates after the third tick")
+}
+
+// Test flow:
+//  1. Build a bridge window with one drained temp, the full temp count, during an epoch PoC that blocks requests, then the same with requests served in the PoC.
+//  2. Tick once.
+//  3. Assert both runs created exactly one temp: the bridge refills in a PoC as it creates there, and never past the temp count.
+func TestDrainedTempsAreRefilledDuringAnEpochPoCUpToTheTempCount(t *testing.T) {
+	for _, mode := range []string{config.PoCModeOff, config.PoCModeRelaxed} {
+		t.Run(mode, func(t *testing.T) {
+			manager, txClient, testStore := drainedBridgeManager(t, 1, func(snapshot *chain.PhaseSnapshot, cfg *config.Config) {
+				snapshot.RequestsBlocked, snapshot.BlockReason = true, chain.BlockReasonPoC
+				cfg.Modes.PoCMode = mode
+			})
+
+			require.NoError(t, manager.tick(context.Background()))
+			require.NoError(t, manager.tick(context.Background()))
+
+			require.Equal(t, 1, txClient.createCalls, "creates")
+			require.Len(t, testStore.devshards, 2)
+		})
+	}
+}
+
+// Test flow:
+//  1. Build a bridge window with one drained temp, a temp count of one and a recorded demand that needs three fresh escrows.
+//  2. Tick once.
+//  3. Assert the bridge created three temps, four in all: the demand-driven target is not held to the refill's bucket or temp count.
+func TestTheBridgeKeepsTheDemandDrivenTempCountBeyondTheRefill(t *testing.T) {
+	manager, txClient, testStore := drainedBridgeManager(t, 1, func(*chain.PhaseSnapshot, *config.Config) {})
+	manager.planner.modelLocked("qwen", manager.now()).demand.Record(1_800_000)
+
+	require.NoError(t, manager.tick(context.Background()))
+	require.NoError(t, manager.tick(context.Background()))
+
+	require.Equal(t, 3, txClient.createCalls, "creates")
+	require.Len(t, testStore.devshards, 4)
 }

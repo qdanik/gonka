@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -225,7 +227,31 @@ func (m *Manager) tick(ctx context.Context) error {
 
 func (m *Manager) tickWith(ctx context.Context, scheduled bool) error {
 	lifecycleErr := m.runLifecycle(ctx)
-	return errors.Join(lifecycleErr, m.planFunding(ctx, scheduled))
+	planErr := m.planFunding(ctx, scheduled)
+	return errors.Join(lifecycleErr, planErr, m.refillBridge(ctx))
+}
+
+// refillBridge prepares the bridge again for the models this tick's plan asked temps for, so a drain is refilled on the tick the plan reads it.
+func (m *Manager) refillBridge(ctx context.Context) error {
+	pending := m.planner.bridgeRefillModels()
+	if len(pending) == 0 {
+		return nil
+	}
+	rotation := m.config.Load().Rotation
+	snapshot := m.snapshots.Snapshot()
+	if !rotation.Enabled || snapshotHasNoEpochYet(snapshot) || !bridgeWindowOpen(snapshot, rotation) {
+		return nil
+	}
+	models, _ := rotationModels(rotation) // the lifecycle reported a model list that does not parse
+	models = slices.DeleteFunc(models, func(model ModelConfig) bool { return !pending[model.ModelID] })
+	if len(models) == 0 {
+		return nil
+	}
+	devshards, err := m.store.ListDevshards(ctx)
+	if err != nil {
+		return fmt.Errorf("refill bridge: %w", err)
+	}
+	return m.prepareBridge(ctx, snapshot, models, devshards)
 }
 
 func (m *Manager) runLifecycle(ctx context.Context) error {

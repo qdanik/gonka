@@ -126,6 +126,7 @@ func (m *Manager) readModel(model ModelConfig, rows []store.DevshardRecord, comm
 			InBridgeWindow:   blocksToSwitch >= 0 && blocksToSwitch <= prePoC,
 			NearBridgeWindow: blocksToSwitch > prePoC && blocksToSwitch <= nearBridgePrePoCWindows*prePoC,
 			CurrentLabel:     int64(snapshot.EpochIndex),
+			BridgeLabel:      int64(bridgeLabel(snapshot)),
 		},
 		report: FundingReport{
 			Model:  model.ModelID,

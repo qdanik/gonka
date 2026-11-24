@@ -58,6 +58,7 @@ type ModelState struct {
 	InBridgeWindow        bool
 	NearBridgeWindow      bool
 	CurrentLabel          int64
+	BridgeLabel           int64
 	BucketTokens          int
 }
 
@@ -119,7 +120,7 @@ func Plan(state ModelState) Decision {
 	decision.Creates = plannedCreates(state, decision.Shortfalls, regularWanted, count)
 	decision.Broken = regularCreates(decision.Creates)+state.PendingRegularCreates < decision.Shortfalls.Guard || (state.WalletShort && decision.Shortfalls.Guard > 0)
 	decision.SurplusHeld = surplusHeld(state, decision.Shortfalls, routable, decision.Need)
-	decision.BridgeRefill = bridgeRefill(state, decision)
+	decision.BridgeRefill = bridgeRefill(state, decision, routable)
 	decision.Retires = plannedRetires(state, routable, decision)
 	return decision
 }
@@ -286,19 +287,26 @@ func plannedCreates(state ModelState, shortfalls Shortfalls, regularWanted, coun
 }
 
 func createsAllowed(state ModelState) bool {
-	return createsOpen(state) && state.EpochKnown && state.ServedByNetwork && !state.BreakerGated && !state.InBridgeWindow
+	return (!state.RequestsBlocked || state.InConfirmationPoC) && !state.InEpochPoC && state.EpochKnown && state.ServedByNetwork && !state.BreakerGated && !state.InBridgeWindow
 }
 
-func createsOpen(state ModelState) bool {
-	return (!state.RequestsBlocked || state.InConfirmationPoC) && !state.InEpochPoC
-}
-
-func bridgeRefill(state ModelState, decision Decision) int {
-	if !state.InBridgeWindow || !createsOpen(state) {
+// bridgeRefill is how many temps the bridge window adds: the larger of the capacity shortfall and the guard shortfall held to temp_count full temps. Like the bridge's own creates it is not gated by a PoC.
+func bridgeRefill(state ModelState, decision Decision, routable []EscrowState) int {
+	if !state.InBridgeWindow || !state.EpochKnown {
 		return 0
 	}
-	wanted := max(decision.Shortfalls.Guard, decision.Shortfalls.Capacity) - state.PendingTempCreates
+	wanted := max(min(decision.Shortfalls.Guard, state.TempCount-fullTemps(state, routable)), decision.Shortfalls.Capacity) - state.PendingTempCreates
 	return max(0, min(wanted, decision.Room, state.BucketTokens))
+}
+
+func fullTemps(state ModelState, routable []EscrowState) int {
+	count := 0
+	for _, escrow := range routable {
+		if escrow.Temp && escrow.Label == state.BridgeLabel && escrow.Money.Full {
+			count++
+		}
+	}
+	return count
 }
 
 func regularReason(index int, shortfalls Shortfalls) Reason {

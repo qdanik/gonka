@@ -18,14 +18,18 @@ func (m *Manager) runPlannedLifecycle(ctx context.Context, snapshot chain.PhaseS
 	if !rotation.Enabled || len(models) == 0 || snapshotHasNoEpochYet(snapshot) {
 		return lifecycleErr
 	}
-	blocksToEpochSwitch := snapshot.EpochSwitchBlockHeight - snapshot.BlockHeight
-	if blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= rotation.PrePoCBlocks {
+	if bridgeWindowOpen(snapshot, rotation) {
 		return errors.Join(lifecycleErr, m.prepareBridge(ctx, snapshot, models, promoted))
 	}
 	if snapshot.RequestsBlocked {
 		return lifecycleErr
 	}
 	return errors.Join(lifecycleErr, m.retireSurplusReserves(ctx, snapshot, models, promoted))
+}
+
+func bridgeWindowOpen(snapshot chain.PhaseSnapshot, rotation config.Rotation) bool {
+	blocksToEpochSwitch := snapshot.EpochSwitchBlockHeight - snapshot.BlockHeight
+	return blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= rotation.PrePoCBlocks
 }
 
 func (m *Manager) drainPlannedMarks(ctx context.Context, devshards []store.DevshardRecord) error {

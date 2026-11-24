@@ -128,6 +128,18 @@ func (p *fundingPlanner) bridgeNeed(model string) int {
 	return 0
 }
 
+func (p *fundingPlanner) bridgeRefillModels() map[string]bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pending := map[string]bool{}
+	for model, current := range p.models {
+		if current.bridgeRefill > 0 {
+			pending[model] = true
+		}
+	}
+	return pending
+}
+
 func (p *fundingPlanner) takeBridgeRefill(model string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
