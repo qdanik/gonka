@@ -301,3 +301,26 @@ func TestTheBridgeKeepsTheDemandDrivenTempCountBeyondTheRefill(t *testing.T) {
 	require.Equal(t, 3, txClient.createCalls, "creates")
 	require.Len(t, testStore.devshards, 4)
 }
+
+// Test flow:
+//  1. Build a bridge window with two models of one temp each, the qwen temp drained and stored with a refill of one, and llama with no stored refill and no temps.
+//  2. Call `refillBridge`.
+//  3. Assert exactly one create landed, for qwen, and llama has no devshard: the second pass skips a model with no pending refill.
+func TestTheSecondPassPreparesOnlyTheModelsWithAPendingRefill(t *testing.T) {
+	manager, txClient, testStore := drainedBridgeManager(t, 1, func(snapshot *chain.PhaseSnapshot, cfg *config.Config) {
+		snapshot.Models["llama"] = chain.ModelParams{MaxModelLen: 8192}
+		snapshot.FullWeightsByModel["llama"] = map[string]float64{"participant": 1}
+		cfg.Rotation.ModelsJSON = `[{"model_id":"qwen","target_count":1,"temp_count":1,"reserve_count":0,"amount":1000000,"private_key_env":"K","max_unsettled":10},{"model_id":"llama","target_count":1,"temp_count":1,"reserve_count":0,"amount":1000000,"private_key_env":"K","max_unsettled":10}]`
+	})
+	manager.planner.modelLocked("qwen", manager.now()).bridgeRefill = 1
+	manager.planner.modelLocked("llama", manager.now())
+
+	require.NoError(t, manager.refillBridge(context.Background()))
+
+	require.Equal(t, 1, txClient.createCalls, "creates")
+	created := map[string]int{}
+	for _, record := range testStore.devshards {
+		created[record.Model]++
+	}
+	require.Equal(t, map[string]int{"qwen": 2}, created, "devshards by model")
+}
