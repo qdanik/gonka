@@ -92,17 +92,27 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 		return fmt.Errorf("prepare bridge: %w", err)
 	}
 	room := bridgeRoom(label, models, devshards, commitments)
+	refilled := map[string]int{}
 	targetOf := func(model ModelConfig) int {
-		wanted := bridgeTarget(model, m.planner.bridgeNeed(model.ModelID))
-		limit, capped := room[model.ModelID]
-		if !capped {
-			return wanted
+		active := countActive(devshards, model.ModelID, roleTemp, int64(label))
+		held := active + countOpenCreates(commitments, model.ModelID, roleTemp, label)
+		need := m.planner.bridgeNeed(model.ModelID)
+		targetWith := func(refill int) int {
+			wanted := bridgeTarget(model, max(need, held+refill))
+			limit, capped := room[model.ModelID]
+			if !capped {
+				return wanted
+			}
+			return min(wanted, active+max(limit, 0))
 		}
-		return min(wanted, countActive(devshards, model.ModelID, roleTemp, int64(label))+max(limit, 0))
+		refill := m.planner.takeBridgeRefill(model.ModelID)
+		refilled[model.ModelID] = targetWith(refill) - targetWith(0)
+		return targetWith(refill)
 	}
 	var errs []error
 	for _, fill := range m.fillToLabel(ctx, roleTemp, label, models, targetOf, snapshot, devshards, commitments) {
 		model, created, err := fill.model, fill.created, fill.err
+		m.planner.spendBridgeTokens(model.ModelID, min(created, refilled[model.ModelID]))
 		funded := countActive(devshards, model.ModelID, roleTemp, int64(label)) + created
 		if err == nil && funded < model.TempCount {
 			err = fmt.Errorf("%w: %d of %d for %s", errBridgePartialFill, funded, model.TempCount, model.ModelID)

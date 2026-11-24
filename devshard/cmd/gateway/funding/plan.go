@@ -45,6 +45,7 @@ type ModelState struct {
 	Parking               int
 	PendingRegularCreates int
 	PendingStandbyCreates int
+	PendingTempCreates    int
 	MoneyShort            bool
 	WalletShort           bool
 	SurplusRetiresHeld    bool
@@ -90,6 +91,7 @@ type Decision struct {
 	AmountNeeded  uint64
 	Need          uint64
 	NeedEscrows   int
+	BridgeRefill  int
 	Liquid        uint64
 	Broken        bool
 	Misconfigured bool
@@ -117,6 +119,7 @@ func Plan(state ModelState) Decision {
 	decision.Creates = plannedCreates(state, decision.Shortfalls, regularWanted, count)
 	decision.Broken = regularCreates(decision.Creates)+state.PendingRegularCreates < decision.Shortfalls.Guard || (state.WalletShort && decision.Shortfalls.Guard > 0)
 	decision.SurplusHeld = surplusHeld(state, decision.Shortfalls, routable, decision.Need)
+	decision.BridgeRefill = bridgeRefill(state, decision)
 	decision.Retires = plannedRetires(state, routable, decision)
 	return decision
 }
@@ -283,7 +286,19 @@ func plannedCreates(state ModelState, shortfalls Shortfalls, regularWanted, coun
 }
 
 func createsAllowed(state ModelState) bool {
-	return (!state.RequestsBlocked || state.InConfirmationPoC) && !state.InEpochPoC && state.EpochKnown && state.ServedByNetwork && !state.BreakerGated && !state.InBridgeWindow
+	return createsOpen(state) && state.EpochKnown && state.ServedByNetwork && !state.BreakerGated && !state.InBridgeWindow
+}
+
+func createsOpen(state ModelState) bool {
+	return (!state.RequestsBlocked || state.InConfirmationPoC) && !state.InEpochPoC
+}
+
+func bridgeRefill(state ModelState, decision Decision) int {
+	if !state.InBridgeWindow || !createsOpen(state) {
+		return 0
+	}
+	wanted := max(decision.Shortfalls.Guard, decision.Shortfalls.Capacity) - state.PendingTempCreates
+	return max(0, min(wanted, decision.Room, state.BucketTokens))
 }
 
 func regularReason(index int, shortfalls Shortfalls) Reason {

@@ -40,6 +40,7 @@ type modelFunding struct {
 	surplusStreak int
 	surplusHold   funding.SurplusHold
 	needEscrows   int
+	bridgeRefill  int
 	broken        bool
 	misconfigured bool
 	budgetReached bool
@@ -127,6 +128,26 @@ func (p *fundingPlanner) bridgeNeed(model string) int {
 	return 0
 }
 
+func (p *fundingPlanner) takeBridgeRefill(model string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	current, known := p.models[model]
+	if !known {
+		return 0
+	}
+	refill := current.bridgeRefill
+	current.bridgeRefill = 0
+	return refill
+}
+
+func (p *fundingPlanner) spendBridgeTokens(model string, count int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if current, known := p.models[model]; known {
+		current.bucket.Take(count)
+	}
+}
+
 func (p *fundingPlanner) recordCreate(model string, err error, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -165,7 +186,7 @@ func (p *fundingPlanner) decide(model string, reading modelReading, scheduled bo
 		current.walletShort = false
 	}
 	current.bucket.Take(len(decision.Creates))
-	current.needEscrows = decision.NeedEscrows
+	current.needEscrows, current.bridgeRefill = decision.NeedEscrows, decision.BridgeRefill
 	if scheduled {
 		current.surplusStreak = streakAfter(current.surplusStreak, decision.SurplusHeld)
 		current.surplusHold.Elapse()

@@ -161,6 +161,8 @@ func (reading *modelReading) countPendingCreate(role store.Role) {
 		reading.state.PendingStandbyCreates++
 	case roleRegular:
 		reading.state.PendingRegularCreates++
+	case roleTemp:
+		reading.state.PendingTempCreates++
 	}
 }
 
