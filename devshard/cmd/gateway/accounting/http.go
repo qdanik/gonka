@@ -67,24 +67,24 @@ func (h *Handler) serveParticipants(w http.ResponseWriter, r *http.Request) {
 
 func writeParticipants(w http.ResponseWriter, epoch uint64, records []ParticipantRecord) {
 	w.WriteHeader(http.StatusOK)
-	var line bytes.Buffer
-	encoder := json.NewEncoder(&line)
-	fmt.Fprintf(&line, `{"schema_version":%d,"epoch_index":%d,"participants":[`, SchemaVersion, epoch)
+	var chunk bytes.Buffer
+	encoder := json.NewEncoder(&chunk)
+	fmt.Fprintf(&chunk, `{"schema_version":%d,"epoch_index":%d,"participants":[`, SchemaVersion, epoch)
 	for i := range records {
 		if i > 0 {
-			line.WriteByte(',')
+			chunk.WriteByte(',')
 		}
 		if encoder.Encode(&records[i]) != nil {
 			return
 		}
-		line.Truncate(line.Len() - 1)
-		if _, err := w.Write(line.Bytes()); err != nil {
+		chunk.Truncate(chunk.Len() - 1)
+		if _, err := w.Write(chunk.Bytes()); err != nil {
 			return
 		}
-		line.Reset()
+		chunk.Reset()
 	}
-	line.WriteString("]}\n")
-	_, _ = w.Write(line.Bytes())
+	chunk.WriteString("]}\n")
+	_, _ = w.Write(chunk.Bytes())
 }
 
 func (h *Handler) serveParticipant(w http.ResponseWriter, r *http.Request) {
