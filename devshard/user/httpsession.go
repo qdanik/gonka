@@ -85,7 +85,6 @@ func hostClientConfig(
 		if cfg.ExtraClientConfig.HeightSync != nil {
 			clientConfig.HeightSync = cfg.ExtraClientConfig.HeightSync
 			clientConfig.HeightSyncPeerTips = sharedPeerTips
-			clientConfig.HeightSyncAudit = cfg.ExtraClientConfig.HeightSyncAudit
 		}
 		if cfg.ExtraClientConfig.HeightSyncLogOracle != nil {
 			clientConfig.HeightSyncLogOracle = cfg.ExtraClientConfig.HeightSyncLogOracle
