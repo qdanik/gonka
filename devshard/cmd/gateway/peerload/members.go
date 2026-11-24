@@ -166,7 +166,7 @@ func (m *membership) Refresh(ctx context.Context) error {
 	budgeted, cancel := context.WithTimeout(ctx, registryRefreshBudget)
 	defer cancel()
 	read := make(map[PeerID]peerInstance)
-	var failed []string
+	failed := map[string]bool{}
 	var firstFailure error
 	for batch := range slices.Chunk(addresses, registryBatchAddresses) {
 		members, err := m.readMembers(budgeted, batch)
@@ -177,7 +177,7 @@ func (m *membership) Refresh(ctx context.Context) error {
 		for _, address := range batch {
 			members, err := m.readMembers(budgeted, []string{address})
 			if err != nil {
-				failed = append(failed, address)
+				failed[address] = true
 				firstFailure = cmp.Or(firstFailure, err)
 				continue
 			}
@@ -190,7 +190,7 @@ func (m *membership) Refresh(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	keepsCurrent := func(address string) bool {
-		return slices.Contains(failed, address) || m.landedReads[address] > sequence
+		return failed[address] || m.landedReads[address] > sequence
 	}
 	maps.DeleteFunc(read, func(id PeerID, _ peerInstance) bool { return keepsCurrent(id.Address) })
 	for id, instance := range m.instances {

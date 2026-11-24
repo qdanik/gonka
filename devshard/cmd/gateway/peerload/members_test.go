@@ -249,6 +249,35 @@ func TestFailingAddressKeepsItsLastGoodEntry(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Read five addresses of one entry each, then fail two of them and remove the entries of one failing and one succeeding address.
+//  2. Refresh.
+//  3. Assert the read is partial, both failing addresses keep their last entry, and the succeeding address whose entry went is dropped.
+func TestRefreshWithSeveralFailingAddressesKeepsOnlyThoseAddresses(t *testing.T) {
+	addresses := []string{"gonka1a", "gonka1b", "gonka1c", "gonka1d", "gonka1e"}
+	registry := newFakeRegistry()
+	for _, address := range addresses {
+		registry.put(address, registryEntry("n", newIdentity(t, PeerID{Address: address, Instance: "n"}), "https://"+address+".example:8443"))
+	}
+	members := newMembership(ownIdentity{ID: PeerID{Address: firstAddress, Instance: "self"}, AdvertiseURL: selfEndpoint}, registry, newFakeClock().now)
+	members.ObserveChain(addresses, testHeight)
+	refreshed(t, members)
+
+	registry.failAddress("gonka1b", errors.New("read failed"))
+	registry.failAddress("gonka1d", errors.New("read failed"))
+	registry.remove("gonka1c")
+	registry.remove("gonka1d")
+	err := members.Refresh(context.Background())
+
+	if !errors.Is(err, errPartialRead) {
+		t.Fatalf("Refresh() = %v, want errPartialRead", err)
+	}
+	want := []string{"gonka1a/n", "gonka1b/n", "gonka1d/n", "gonka1e/n"}
+	if got := instanceNames(members.Peers()); !slices.Equal(got, want) {
+		t.Fatalf("Peers() = %v, want %v", got, want)
+	}
+}
+
 type switchingRegistry struct{ Registry }
 
 // Test flow:

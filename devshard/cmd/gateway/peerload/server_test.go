@@ -1,6 +1,7 @@
 package peerload
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/tls"
 	"errors"
@@ -13,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/hpack"
 )
 
 const (
@@ -468,5 +472,81 @@ func TestAConnectionOfAPeerRemovedBeforeItsPrefaceIsClosedAndNotCounted(t *testi
 	}
 	if got := server.verifier.HandshakeCounts()[HandshakeAccepted]; got != 0 {
 		t.Fatalf("HandshakeCounts()[accepted] = %d, want 0", got)
+	}
+}
+
+type bulkyTopic struct{ *loadTopic }
+
+func (bulkyTopic) Build(time.Time) ([]byte, error) { return bytes.Repeat([]byte("x"), 16<<10), nil }
+
+// Test flow:
+//  1. Serve a response larger than the write buffer over real TLS 1.3 with a short write timeout and assert the default is serverWriteTimeout.
+//  2. Connect as the pinned peer over HTTP/2 with a flow-control window of zero and request the load topic once.
+//  3. Assert the handler entered and that it returns within a bound although the client never reads.
+func TestHandlerOfAPeerThatNeverReadsIsReleasedByTheWriteTimeout(t *testing.T) {
+	const bound = 10 * time.Second
+	fixture := newVerifierFixture(t)
+	load := newLoadTopic(func() []LoadSample { return nil }, DefaultRounding(), nil)
+	server := newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{bulkyTopic{load}}, fixture.clock.now)
+	if server.http.WriteTimeout != serverWriteTimeout {
+		t.Fatalf("WriteTimeout = %v, want %v", server.http.WriteTimeout, serverWriteTimeout)
+	}
+	server.http.WriteTimeout = 2 * time.Second
+	entered := make(chan struct{}, 1)
+	released := make(chan struct{}, 1)
+	inner := server.http.Handler
+	server.http.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		entered <- struct{}{}
+		defer func() { released <- struct{}{} }()
+		inner.ServeHTTP(writer, request)
+	})
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = server.Close()
+		if err := <-served; err != nil {
+			t.Errorf("Serve() = %v, want nil", err)
+		}
+	})
+	conn, err := tls.Dial("tcp", listener.Addr().String(), &tls.Config{
+		MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, NextProtos: []string{http2Protocol}, //nolint:gosec
+		Certificates: []tls.Certificate{fixture.peer.Certificate},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	framer := http2.NewFramer(conn, conn)
+	if _, err := conn.Write([]byte(http2.ClientPreface)); err != nil {
+		t.Fatal(err)
+	}
+	if err := framer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: 0}); err != nil {
+		t.Fatal(err)
+	}
+	var block bytes.Buffer
+	encoder := hpack.NewEncoder(&block)
+	for _, field := range []hpack.HeaderField{{Name: ":method", Value: "GET"}, {Name: ":scheme", Value: "https"}, {Name: ":authority", Value: listener.Addr().String()}, {Name: ":path", Value: peerPathPrefix + loadTopicName}} {
+		if err := encoder.WriteField(field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: block.Bytes(), EndStream: true, EndHeaders: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(bound):
+		t.Fatalf("the handler was not entered within %v", bound)
+	}
+	select {
+	case <-released:
+	case <-time.After(bound):
+		t.Fatalf("the handler of a client that never reads was not released within %v", bound)
 	}
 }

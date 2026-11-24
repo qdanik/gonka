@@ -7,11 +7,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -210,5 +213,65 @@ func TestClosedPollerLinksNoPeerAgain(t *testing.T) {
 
 	if dials != 0 {
 		t.Fatalf("dials = %d after the poller closed, want 0", dials)
+	}
+}
+
+// Test flow:
+//  1. Link to a peer whose listener accepts TCP and never answers the handshake, and assert the link's default is pollRequestTimeout before shortening it.
+//  2. Poll three rounds and assert each reports a failed poll.
+//  3. Assert the listener sees every poller-side connection closed and the poller's goroutines are gone.
+func TestPollRoundsAgainstASilentPeerLeaveNoConnectionOrGoroutine(t *testing.T) {
+	const (
+		rounds = 3
+		bound  = 10 * time.Second
+	)
+	defer leakcheck.VerifyNoneStarted(t)()
+	var listenConfig net.ListenConfig
+	silent, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = silent.Close() }()
+	registry := newFakeRegistry()
+	plugin := newTestPlugin(t, registry, registry.registrar(firstAddress), newFakeClock().now)
+	id := PeerID{Address: secondAddress, Instance: "silent"}
+	registry.put(secondAddress, registryEntry(id.Instance, newIdentity(t, id), "https://"+silent.Addr().String()))
+	var dialer net.Dialer
+	plugin.poller.dial = dialer.DialContext
+	failures := &failureLog{}
+	plugin.poller.report = failures.report
+	plugin.ObserveChain([]string{secondAddress}, testHeight)
+	plugin.refreshRegistry(t.Context())
+	link := plugin.poller.links[id]
+	if link == nil {
+		t.Fatal("no link after the refresh")
+	}
+	if link.transport.TLSHandshakeTimeout != pollRequestTimeout {
+		t.Fatalf("TLSHandshakeTimeout = %v, want %v", link.transport.TLSHandshakeTimeout, pollRequestTimeout)
+	}
+	link.transport.TLSHandshakeTimeout = 100 * time.Millisecond
+
+	for range rounds {
+		plugin.pollPeers(t.Context())
+	}
+
+	if len(failures.messages) != rounds {
+		t.Fatalf("reported failures = %v, want %d", failures.messages, rounds)
+	}
+	for range rounds {
+		if err := silent.(*net.TCPListener).SetDeadline(time.Now().Add(bound)); err != nil {
+			t.Fatal(err)
+		}
+		accepted, err := silent.Accept()
+		if err != nil {
+			t.Fatalf("Accept() = %v, want a connection from each round", err)
+		}
+		defer func() { _ = accepted.Close() }()
+		if err := accepted.SetReadDeadline(time.Now().Add(bound)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(io.Discard, accepted); errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("the poller kept its side of the connection open for %v", bound)
+		}
 	}
 }
