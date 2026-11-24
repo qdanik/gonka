@@ -5,11 +5,13 @@
 # the plain-`go build` default and signs settlements the network computes differently, so every target
 # that produces a binary passes it -- including the images -- and refuses to run without it.
 
-.PHONY: help require-version build test test-race test-junit cover lint verify image release clean
+.PHONY: help require-version build test test-race test-junit cover lint verify image release upgrade clean
 
 GATEWAY_IMAGE ?= ghcr.io/gonka-ai/devshard-gateway-v4
 GATEWAY_TAGS ?=
 GATEWAY_STAGE_TAG ?= stage
+UPGRADE_IMAGE ?=
+UPGRADE_FLAGS ?=
 PLATFORM ?= linux/amd64
 
 # `cmd/gateway` is not its own module: the go tool resolves upwards to devshard/, and the docker build
@@ -40,6 +42,7 @@ help:
 	@echo "verify       test-race and lint: the gate before a push"
 	@echo "image        build $(GATEWAY_IMAGE):$(GATEWAY_STAGE_TAG) into the local daemon"
 	@echo "release      build and push $(GATEWAY_IMAGE) for every tag in GATEWAY_TAGS"
+	@echo "upgrade      blue-green upgrade of the running stack to UPGRADE_IMAGE, extra flags in UPGRADE_FLAGS"
 
 # Required rather than defaulted: a binary stamped with a version nobody chose signs settlements no host
 # accepts.
@@ -95,6 +98,13 @@ release: require-version
 		-f $(REPO_ROOT)/$(DOCKERFILE) \
 		--push \
 		$(REPO_ROOT)
+
+upgrade:
+	@if [ -z "$(strip $(UPGRADE_IMAGE))" ]; then \
+		echo "UPGRADE_IMAGE is required, e.g. UPGRADE_IMAGE=<registry>/<image>:<tag>" >&2; \
+		exit 1; \
+	fi
+	deploy/upgrade.sh --image $(UPGRADE_IMAGE) $(UPGRADE_FLAGS)
 
 clean:
 	rm -f $(BINARY) $(JUNIT_REPORT) $(COVER_PROFILE)

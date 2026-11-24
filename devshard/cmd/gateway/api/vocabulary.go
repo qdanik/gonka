@@ -28,6 +28,12 @@ const (
 
 const cacheResultStored = "stored"
 
+// The query that makes an escrow's deactivation a handover to another process.
+const (
+	handoverQuery      = "handover"
+	handoverQueryValue = "true"
+)
+
 // Why a request was captured. Capture has these two triggers and no others.
 const (
 	captureFilterRejected = "filter_rejected"

@@ -39,7 +39,7 @@ func TestDeletingAnInactiveEscrowRemovesItsRowAndItsStorage(t *testing.T) {
 	t.Setenv("DEVSHARD_IMPORT_KEY", "0x01")
 	records := openedStore(t)
 	storageDir := t.TempDir()
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY"}); err != nil {
 		t.Fatalf("AddDevshard(inactive) = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestADeleteWaitsForAnActivateHoldingTheEscrowsLock(t *testing.T) {
 	records := openedStore(t)
 	storageDir := t.TempDir()
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows, storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: storageDir}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY"}); err != nil {
 		t.Fatalf("AddDevshard(inactive) = %v", err)
 	}
@@ -107,7 +107,7 @@ func TestADeleteRefusesAnEscrowWhoseSessionIsHeldForSettlement(t *testing.T) {
 	records := openedStore(t)
 	storageDir := t.TempDir()
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows, storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: storageDir}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Activate: true}); err != nil {
 		t.Fatalf("AddDevshard(active) = %v", err)
 	}
@@ -145,7 +145,7 @@ func TestADeleteRefusesAnEscrowParkedForSettlement(t *testing.T) {
 		t.Fatalf("ParkForSettlement(): %v", err)
 	}
 	livePath := liveSession(t, storageDir, "42")
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 
 	err := operator.DeleteDevshard(ctx, "42")
 
@@ -161,7 +161,7 @@ func TestADeleteRefusesAnEscrowParkedForSettlement(t *testing.T) {
 //  2. Delete escrow 42.
 //  3. Assert it returns ErrUnknownDevshard.
 func TestADeleteOfAGoneRowAnswersUnknown(t *testing.T) {
-	operator := &operations{store: openedStore(t), escrows: servingRegistry(t), storageDir: t.TempDir()}
+	operator := &operations{races: noHandover{}, store: openedStore(t), escrows: servingRegistry(t), storageDir: t.TempDir()}
 
 	if err := operator.DeleteDevshard(context.Background(), "42"); !errors.Is(err, api.ErrUnknownDevshard) {
 		t.Fatalf("DeleteDevshard(42) = %v, want ErrUnknownDevshard", err)
@@ -211,7 +211,7 @@ func TestADeleteHoldsTheEscrowsLockWhileRemovingTheRowAndTheStorage(t *testing.T
 	}
 	t.Cleanup(func() { _ = records.Close() })
 	storageDir := t.TempDir()
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY"}); err != nil {
 		t.Fatalf("AddDevshard(inactive) = %v", err)
 	}
