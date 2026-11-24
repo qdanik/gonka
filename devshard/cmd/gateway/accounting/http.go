@@ -1,6 +1,7 @@
 package accounting
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,11 +62,29 @@ func (h *Handler) serveParticipants(w http.ResponseWriter, r *http.Request) {
 	}
 	records := h.book.Query(filterOf(r, epoch))
 	attachCapabilities(records, h.capability)
-	writeJSON(w, http.StatusOK, struct {
-		SchemaVersion int                 `json:"schema_version"`
-		EpochIndex    uint64              `json:"epoch_index"`
-		Participants  []ParticipantRecord `json:"participants"`
-	}{SchemaVersion: SchemaVersion, EpochIndex: epoch, Participants: records})
+	writeParticipants(w, epoch, records)
+}
+
+func writeParticipants(w http.ResponseWriter, epoch uint64, records []ParticipantRecord) {
+	w.WriteHeader(http.StatusOK)
+	var line bytes.Buffer
+	encoder := json.NewEncoder(&line)
+	fmt.Fprintf(&line, `{"schema_version":%d,"epoch_index":%d,"participants":[`, SchemaVersion, epoch)
+	for i := range records {
+		if i > 0 {
+			line.WriteByte(',')
+		}
+		if encoder.Encode(&records[i]) != nil {
+			return
+		}
+		line.Truncate(line.Len() - 1)
+		if _, err := w.Write(line.Bytes()); err != nil {
+			return
+		}
+		line.Reset()
+	}
+	line.WriteString("]}\n")
+	_, _ = w.Write(line.Bytes())
 }
 
 func (h *Handler) serveParticipant(w http.ResponseWriter, r *http.Request) {
