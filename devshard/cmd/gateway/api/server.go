@@ -99,6 +99,9 @@ type ImportDevshardRequest struct {
 	PrivateKeyEnv string `json:"private_key_env"`
 	SourcePath    string `json:"source_path"`
 	Activate      bool   `json:"active"`
+	RotationRole  string `json:"rotation_role"`
+	RotationEpoch int64  `json:"rotation_epoch"`
+	RoutePrefix   string `json:"route_prefix"`
 }
 
 // SettleDevshardsRequest is the batch settle body. See docs/runbook.md, "Settling a list of escrows".
@@ -122,6 +125,7 @@ type Operations interface {
 	DeleteDevshard(ctx context.Context, escrowID string) error
 	Activate(ctx context.Context, escrowID string) error
 	Deactivate(ctx context.Context, escrowID string) error
+	HandOver(ctx context.Context, escrowID string) error
 	Settle(ctx context.Context, escrowID string, force bool) (chain.SettleEscrowResult, error)
 	Unquarantine(ctx context.Context, participantKey string) error
 	Reconfigure(ctx context.Context, overrides config.Overrides) error

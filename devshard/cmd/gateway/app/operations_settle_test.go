@@ -73,7 +73,7 @@ func TestSettleStopsRoutingBeforeTheChainSettlementAndLeavesItRetiredWhenItFails
 		t.Run(testCase.name, func(t *testing.T) {
 			records, escrows := settleableEscrow(t)
 			settler := &settleObserver{escrows: escrows, failure: testCase.failure}
-			operator := &operations{store: records, escrows: escrows, manager: settler}
+			operator := &operations{races: noHandover{}, store: records, escrows: escrows, manager: settler}
 
 			_, err := operator.Settle(context.Background(), "42", false)
 
@@ -97,7 +97,7 @@ func TestSettleStopsRoutingBeforeTheChainSettlementAndLeavesItRetiredWhenItFails
 func TestASettleAfterTheEscrowWasSettledAnswersUnknown(t *testing.T) {
 	ctx := context.Background()
 	records, escrows := settleableEscrow(t)
-	operator := &operations{store: records, escrows: escrows, manager: &rowDeletingSettler{records: records}}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, manager: &rowDeletingSettler{records: records}}
 
 	_, first := operator.Settle(ctx, "42", false)
 	_, second := operator.Settle(ctx, "42", false)
@@ -115,7 +115,7 @@ func TestASettleAfterTheEscrowWasSettledAnswersUnknown(t *testing.T) {
 //  2. Call operator.Deactivate for escrow 42.
 //  3. Assert it returns ErrUnknownDevshard.
 func TestADeactivateOfAGoneRowAnswersUnknown(t *testing.T) {
-	operator := &operations{store: openedStore(t), escrows: servingRegistry(t)}
+	operator := &operations{races: noHandover{}, store: openedStore(t), escrows: servingRegistry(t)}
 
 	if err := operator.Deactivate(context.Background(), "42"); !errors.Is(err, api.ErrUnknownDevshard) {
 		t.Fatalf("Deactivate(42) = %v, want ErrUnknownDevshard", err)
@@ -128,7 +128,7 @@ func TestADeactivateOfAGoneRowAnswersUnknown(t *testing.T) {
 //  3. Assert it returns ErrUnknownDevshard.
 func TestASettleWhoseRowTheRotationDeletedMeanwhileAnswersUnknown(t *testing.T) {
 	records, escrows := settleableEscrow(t)
-	operator := &operations{store: records, escrows: escrows, manager: &settleObserver{escrows: escrows, failure: escrow.ErrUnknownEscrow}}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, manager: &settleObserver{escrows: escrows, failure: escrow.ErrUnknownEscrow}}
 
 	if _, err := operator.Settle(context.Background(), "42", false); !errors.Is(err, api.ErrUnknownDevshard) {
 		t.Fatalf("Settle(42) = %v, want ErrUnknownDevshard", err)

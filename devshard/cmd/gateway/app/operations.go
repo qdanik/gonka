@@ -82,6 +82,11 @@ func (s *suspiciousHosts) Remove(ctx context.Context, participantKey string) err
 	return nil
 }
 
+type voteHandover interface {
+	HandOver(escrowID string)
+	Resume(escrowID string) bool
+}
+
 // escrowLifecycle is the chain-facing half of an operator action; *escrow.Manager satisfies it.
 type escrowLifecycle interface {
 	CreateEscrow(ctx context.Context, model escrow.ModelConfig) (chain.CreateEscrowResult, error)
@@ -92,6 +97,7 @@ type operations struct {
 	config       *config.Holder
 	store        *store.Store
 	escrows      *registry.Registry
+	races        voteHandover
 	manager      escrowLifecycle
 	participants *limits.ParticipantLimiter
 	storageDir   string
@@ -135,6 +141,9 @@ func (o *operations) ImportDevshard(ctx context.Context, request api.ImportDevsh
 		PrivateKeyEnv: request.PrivateKeyEnv,
 		Model:         request.Model,
 		Active:        request.Activate,
+		RotationRole:  store.Role(request.RotationRole),
+		RotationEpoch: request.RotationEpoch,
+		RoutePrefix:   request.RoutePrefix,
 	}
 	if err := refuseUnregistrable(record); err != nil {
 		return err
@@ -220,7 +229,21 @@ func (o *operations) save(ctx context.Context, record store.DevshardRecord) erro
 	if !record.Active {
 		return o.escrows.Retire(record.EscrowID)
 	}
-	return addServing(ctx, listing, record)
+	return o.serveOrRevert(ctx, listing, record, o.races.Resume(record.EscrowID))
+}
+
+func (o *operations) serveOrRevert(ctx context.Context, listing escrowAdder, record store.DevshardRecord, handedOver bool) error {
+	err := addServing(ctx, listing, record)
+	if !errors.Is(err, registry.ErrDraining) {
+		return err
+	}
+	if handedOver {
+		o.races.HandOver(record.EscrowID)
+	}
+	if revertErr := o.store.SetDevshardActive(ctx, record.EscrowID, false); revertErr != nil {
+		return errors.Join(err, revertErr)
+	}
+	return err
 }
 
 func (o *operations) refuseServedStorage(escrowID string, active bool) error {
@@ -264,12 +287,27 @@ func (o *operations) Activate(ctx context.Context, id string) error {
 	if !activated {
 		return parkedError(api.ErrDevshardNotActivatable, id)
 	}
-	return addServing(ctx, listing, record)
+	return o.serveOrRevert(ctx, listing, record, o.races.Resume(id))
 }
 
 // Deactivate retires the escrow before and after writing its row inactive, as an inactive registration does. See README.md, "Admin operations".
 func (o *operations) Deactivate(ctx context.Context, id string) error {
 	defer o.lockWrites(id)()
+	return o.deactivateLocked(ctx, id)
+}
+
+// HandOver is Deactivate for an escrow another process takes over: its session stops waiting for execution votes not yet due, which the next owner's sweep posts. See ../docs/race.md, "Handing an escrow over".
+func (o *operations) HandOver(ctx context.Context, id string) error {
+	defer o.lockWrites(id)()
+	o.races.HandOver(id)
+	if err := o.deactivateLocked(ctx, id); err != nil {
+		o.races.Resume(id)
+		return err
+	}
+	return nil
+}
+
+func (o *operations) deactivateLocked(ctx context.Context, id string) error {
 	if err := o.escrows.Retire(id); err != nil {
 		return err
 	}

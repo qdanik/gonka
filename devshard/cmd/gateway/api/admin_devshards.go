@@ -114,6 +114,10 @@ func (s *Server) handleAdminDevshardActivate(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleAdminDevshardDeactivate(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get(handoverQuery) == handoverQueryValue {
+		s.lifecycle(w, r, "escrow handed over", s.operations.HandOver)
+		return
+	}
 	s.lifecycle(w, r, "escrow deactivated", s.operations.Deactivate)
 }
 

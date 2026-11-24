@@ -1,0 +1,72 @@
+# Two gateway colours behind nginx, upgraded with ./upgrade.sh. See README.md, "Upgrading without downtime".
+# The colours never share a storage directory: each owns data/<colour> and mounts the other's read-only, so the incoming one can import the outgoing one's escrow sessions.
+
+x-gateway: &gateway
+  env_file:
+    - ${DEVSHARD_ENV_FILE:-./config.devshard-gateway.env}
+  environment:
+    GOMEMLIMIT: ${DEVSHARD_GOMEMLIMIT:-3400MiB}
+    # Fixed here, over the env file: a colour that restarts mid-upgrade must not seed or create escrows the other colour still holds. Rotation is switched by the admin setting rotation_enabled, which the store keeps.
+    DEVSHARDS_JSON: ""
+    DEVSHARD_ESCROW_ROTATION_ENABLED: "false"
+  networks:
+    - join_default
+  restart: unless-stopped
+  # The gateway's own shutdown grace is 10 s; this covers it, the journal's floor and the store close.
+  stop_grace_period: 30s
+  healthcheck:
+    test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+
+services:
+  gateway-blue:
+    <<: *gateway
+    container_name: ${DEVSHARD_INSTANCE_NAME:-devshard-gateway}-blue
+    image: ${GATEWAY_BLUE_IMAGE:-${GATEWAY_IMAGE:-kovec/gateway:v4.1.1}}
+    volumes:
+      - ./data/blue:${DEVSHARD_STORAGE_DIR:-/root/.devshard-gateway}
+      - ./data/green:/handover/green:ro
+    expose:
+      - "8080"
+    ports:
+      - "127.0.0.1:${GATEWAY_BLUE_HOST_PORT:-18081}:8080"
+
+  gateway-green:
+    <<: *gateway
+    container_name: ${DEVSHARD_INSTANCE_NAME:-devshard-gateway}-green
+    image: ${GATEWAY_GREEN_IMAGE:-${GATEWAY_IMAGE:-kovec/gateway:v4.1.1}}
+    volumes:
+      - ./data/green:${DEVSHARD_STORAGE_DIR:-/root/.devshard-gateway}
+      - ./data/blue:/handover/blue:ro
+    expose:
+      - "8080"
+    ports:
+      - "127.0.0.1:${GATEWAY_GREEN_HOST_PORT:-18082}:8080"
+
+  nginx:
+    container_name: ${DEVSHARD_INSTANCE_NAME:-devshard-gateway}-nginx
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # A directory, not a file: the script replaces active.conf by rename, which a single-file mount would not follow.
+      - ./nginx-active:/etc/nginx/active:ro
+    ports:
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-18080}:80"
+    networks:
+      join_default:
+        aliases:
+          - ${DEVSHARD_INSTANCE_NAME:-devshard-gateway}
+          - devshard-pool
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/_colour"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  join_default:
+    external: true

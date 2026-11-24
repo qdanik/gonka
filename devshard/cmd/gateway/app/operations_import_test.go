@@ -65,7 +65,7 @@ func TestARefusedImportLeavesTheParkedEscrowsStorageAlone(t *testing.T) {
 		t.Fatalf("ParkForSettlement(): %v", err)
 	}
 	livePath := liveSession(t, storageDir, "42")
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 
 	err := operator.ImportDevshard(ctx, api.ImportDevshardRequest{EscrowID: "42", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a"})
 
@@ -91,7 +91,7 @@ func TestAnImportOfAServingEscrowIsRefusedBeforeItsStorageIsTouched(t *testing.T
 		t.Fatalf("UpsertDevshard(): %v", err)
 	}
 	livePath := liveSession(t, storageDir, "42")
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 
 	err := operator.ImportDevshard(ctx, api.ImportDevshardRequest{EscrowID: "42", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a"})
 
@@ -112,7 +112,7 @@ func TestAnImportWithoutItsKeyWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	records := openedStore(t)
 	storageDir := t.TempDir()
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 
 	err := operator.ImportDevshard(ctx, api.ImportDevshardRequest{EscrowID: "42", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_UNSET_KEY", Model: "model-a"})
 
@@ -142,7 +142,7 @@ func TestAnImportWhoseIDIsNotAChainEscrowIDWritesNothing(t *testing.T) {
 	if err := os.MkdirAll(storageDir, storageDirectoryMode); err != nil {
 		t.Fatalf("MkdirAll(storage): %v", err)
 	}
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 
 	for _, escrowID := range []string{"1/../../outside", "../outside", "1/2", "escrow-1", "007", "+7", " 7", "-1", "18446744073709551616"} {
 		err := operator.ImportDevshard(ctx, api.ImportDevshardRequest{EscrowID: escrowID, SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a"})
@@ -186,7 +186,7 @@ func TestReimportingAnInactiveEscrowReplacesItsStorage(t *testing.T) {
 		t.Fatalf("UpsertDevshard(): %v", err)
 	}
 	livePath := liveSession(t, storageDir, "42")
-	operator := &operations{store: records, escrows: servingRegistry(t), storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: storageDir}
 
 	if err := operator.ImportDevshard(ctx, api.ImportDevshardRequest{EscrowID: "42", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a"}); err != nil {
 		t.Fatalf("ImportDevshard(inactive) = %v, want nil", err)
@@ -206,7 +206,7 @@ func TestRegisteringALiveEscrowInactiveStopsRoutingIt(t *testing.T) {
 	t.Setenv("DEVSHARD_IMPORT_KEY", "0x01")
 	records := openedStore(t)
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows, storageDir: t.TempDir()}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: t.TempDir()}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Activate: true}); err != nil {
 		t.Fatalf("AddDevshard(active) = %v, want nil", err)
 	}
@@ -241,7 +241,7 @@ func TestAnImportOfAnEscrowTheRegistryRoutesIsRefusedWhateverItsRow(t *testing.T
 		t.Fatalf("Add(): %v", err)
 	}
 	livePath := liveSession(t, storageDir, "42")
-	operator := &operations{store: records, escrows: escrows, storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: storageDir}
 
 	err := operator.ImportDevshard(ctx, api.ImportDevshardRequest{EscrowID: "42", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a"})
 
@@ -264,7 +264,7 @@ func TestAnImportRefusesAnEscrowWhoseSessionIsHeldForSettlement(t *testing.T) {
 	records := openedStore(t)
 	storageDir := t.TempDir()
 	escrows := servingRegistry(t)
-	operator := &operations{store: records, escrows: escrows, storageDir: storageDir}
+	operator := &operations{races: noHandover{}, store: records, escrows: escrows, storageDir: storageDir}
 	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{EscrowID: "42", Model: "model-a", PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Activate: true}); err != nil {
 		t.Fatalf("AddDevshard(active) = %v", err)
 	}
@@ -285,5 +285,35 @@ func TestAnImportRefusesAnEscrowWhoseSessionIsHeldForSettlement(t *testing.T) {
 	}
 	if got := fileContents(t, livePath); got != liveSessionState {
 		t.Errorf("held session's epoch file = %q, want %q", got, liveSessionState)
+	}
+}
+
+// Test flow:
+//  1. Import escrow 42 as active, carrying the regular role, rotation epoch 7 and a route prefix.
+//  2. Assert the stored row holds the role, the epoch and the prefix, as a rotation-created escrow's row does.
+//  3. Import escrow 43 as active with none of the three.
+//  4. Assert its row holds an empty role, epoch 0 and an empty prefix, as it did before the fields existed.
+func TestAnImportKeepsTheRotationIdentityItIsGiven(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("DEVSHARD_IMPORT_KEY", "0x01")
+	records := openedStore(t)
+	operator := &operations{races: noHandover{}, store: records, escrows: servingRegistry(t), storageDir: t.TempDir()}
+
+	carrying := api.ImportDevshardRequest{EscrowID: "42", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a", Activate: true, RotationRole: string(store.RoleRegular), RotationEpoch: 7, RoutePrefix: "v7"}
+	if err := operator.ImportDevshard(ctx, carrying); err != nil {
+		t.Fatalf("ImportDevshard(carrying) = %v, want nil", err)
+	}
+	bare := api.ImportDevshardRequest{EscrowID: "43", SourcePath: sessionSource(t), PrivateKeyEnv: "DEVSHARD_IMPORT_KEY", Model: "model-a", Activate: true}
+	if err := operator.ImportDevshard(ctx, bare); err != nil {
+		t.Fatalf("ImportDevshard(bare) = %v, want nil", err)
+	}
+
+	got := storedDevshard(t, records, "42")
+	if !got.Active || got.RotationRole != store.RoleRegular || got.RotationEpoch != 7 || got.RoutePrefix != "v7" {
+		t.Errorf("imported row = %+v, want active, role regular, epoch 7, prefix v7", got)
+	}
+	plain := storedDevshard(t, records, "43")
+	if plain.RotationRole != store.RoleUnset || plain.RotationEpoch != 0 || plain.RoutePrefix != "" {
+		t.Errorf("row imported without rotation fields = %+v, want role unset, epoch 0, prefix empty", plain)
 	}
 }
