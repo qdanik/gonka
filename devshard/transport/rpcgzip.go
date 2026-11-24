@@ -74,6 +74,9 @@ var gzipClientOptions sync.Map
 // withGzipReadCap is WithGzipReadCap for clients. WithCompression is a
 // HandlerOption; clients register the same pool with WithAcceptCompression.
 func withGzipReadCap(maxBytes int) connect.ClientOption {
+	if option, ok := gzipClientOptions.Load(maxBytes); ok {
+		return option.(connect.ClientOption)
+	}
 	dec, comp := gzipReadCapConstructors(maxBytes)
 	option, _ := gzipClientOptions.LoadOrStore(maxBytes, connect.WithAcceptCompression(gzipEncoding, dec, comp))
 	return option.(connect.ClientOption)
