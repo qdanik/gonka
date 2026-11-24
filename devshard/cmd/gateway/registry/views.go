@@ -24,6 +24,22 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 	return candidates
 }
 
+// SlotsByParticipant counts each participant's slots over the groups of every accepting escrow.
+func (r *Registry) SlotsByParticipant() map[string]int {
+	slots := map[string]int{}
+	for _, entries := range r.live.Load().byModel {
+		for _, entry := range entries {
+			if !entry.accepting() {
+				continue
+			}
+			for _, participant := range entry.stream.SlotParticipants() {
+				slots[participant]++
+			}
+		}
+	}
+	return slots
+}
+
 // UnvoteableHosts names the hosts of the model's open escrows whose own nonces no timeout vote can reach.
 func (r *Registry) UnvoteableHosts(model string) map[string]bool {
 	hosts := map[string]bool{}

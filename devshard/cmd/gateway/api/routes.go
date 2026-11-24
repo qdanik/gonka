@@ -7,6 +7,7 @@ import (
 	"net/http/pprof"
 	"sync"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
@@ -211,7 +212,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	}
 	releaseBody := sync.OnceFunc(func() { s.requestBodies.release(int64(len(body))) })
 	defer releaseBody()
-	normalized, err := filters.NormalizeRequest(body, filterOptions(configuration, identity.admin, s.servedModelVocabulary, s.modelFilters.Profiles()))
+	options := filterOptions(configuration, identity.admin, s.servedModelVocabulary, s.modelFilters.Profiles())
+	options.Affinity = configuration.Affinity.Enabled
+	normalized, err := filters.NormalizeRequest(body, options)
 	releaseBody()
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
@@ -282,12 +285,12 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	if s.cache == nil {
 		// Nothing to store, so the outcome and the hidden failure the cache path reads are both moot.
-		_, _ = s.race(w, r, requestID, identity.caller(), normalized, counted, escrowPin, configuration.For(normalized.Model).Limits.LogprobsOptimization, slot)
+		_, _ = s.race(w, r, identity, requestID, normalized, counted, escrowPin, configuration.For(normalized.Model).Limits.LogprobsOptimization, slot)
 		return
 	}
 	recorder := newCacheRecorder(w, s.cache.entryLimit(), normalized.ClientStream, s.buffers)
 	defer recorder.releaseBudget()
-	outcome, hiddenFailure := s.race(recorder, r, requestID, identity.caller(), normalized, counted, escrowPin, configuration.For(normalized.Model).Limits.LogprobsOptimization, slot)
+	outcome, hiddenFailure := s.race(recorder, r, identity, requestID, normalized, counted, escrowPin, configuration.For(normalized.Model).Limits.LogprobsOptimization, slot)
 	unstorable := cmp.Or(r.Context().Err(), hiddenFailure)
 	entry, storable := recorder.entry(outcome.EscrowID, normalized.ClientStream, unstorable)
 	if !storable {
@@ -364,11 +367,16 @@ func authorizeModel(configured *config.Config, model string, identity credential
 }
 
 // race returns the outcome and the failure the reply's status could not carry. See README.md, "Streaming the reply".
-func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID, apiKeyID string, normalized filters.Result, prompt promptCount, escrowPin string, logprobsOptimization *bool, slot *limiterSlot) (engine.RaceOutcome, error) {
+func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentials, requestID string, normalized filters.Result, prompt promptCount, escrowPin string, logprobsOptimization *bool, slot *limiterSlot) (engine.RaceOutcome, error) {
+	apiKeyID := identity.caller()
 	startedAt := s.now()
 	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs, prompt.tokens, s.buffers)
 	defer client.discard()
 	outputTokens := outputTokenBudget(normalized)
+	session := s.conversation(r, identity, normalized)
+	if session.issued != affinity.NoSession {
+		client.Header().Set(SessionKeyHeader, session.issued)
+	}
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
 		RequestID:               requestID,
 		Model:                   normalized.Model,
@@ -380,6 +388,9 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID, apiKeyI
 		OutputTokens:            outputTokens,
 		ClientStream:            normalized.ClientStream,
 		EmptyAnswerCountsTokens: normalized.EmptyAnswerCountsTokens,
+		AffinityKey:             session.lookup,
+		SessionDigest:           session.digest,
+		IssuedSession:           session.issued,
 		OnEscrow:                func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 		OnFinished:              slot.share(),
 
@@ -390,6 +401,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID, apiKeyI
 			MaxTokens:                    outputTokens,
 			StartedAt:                    s.now().Unix(),
 			LogprobsOptimizationOverride: logprobsOptimization,
+			SessionKey:                   session.digest.Hex(),
 		},
 	}, client)
 	if err != nil {
@@ -415,4 +427,37 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID, apiKeyI
 	}
 	s.finishRequest(requestID, apiKeyID, normalized, outcome, delivery, client, s.now().Sub(startedAt), client.answeredHostFailure(), closeErr)
 	return outcome, cmp.Or(closeErr, client.replayRefusal())
+}
+
+func affinityKey(r *http.Request, identity credentials, normalized filters.Result) affinity.Key {
+	if !identity.apiKey && !identity.admin {
+		return affinity.NoKey
+	}
+	bearer, _ := bearerKey(r.Header.Get("Authorization"))
+	return affinity.KeyFor(bearer, normalized.Model, normalized.Affinity.PromptCacheKey, normalized.Affinity.LeadingMessages)
+}
+
+type conversation struct {
+	lookup affinity.Key
+	digest affinity.Key
+	issued string
+}
+
+func (s *Server) conversation(r *http.Request, identity credentials, normalized filters.Result) conversation {
+	lookup := affinityKey(r, identity, normalized)
+	if lookup == affinity.NoKey || normalized.Affinity.PromptCacheKey != filters.NoPromptCacheKey {
+		return conversation{lookup: lookup, digest: lookup, issued: affinity.NoSession}
+	}
+	issued := s.issuedSession(lookup)
+	bearer, _ := bearerKey(r.Header.Get("Authorization"))
+	return conversation{lookup: lookup, digest: affinity.KeyFor(bearer, normalized.Model, issued, nil), issued: issued}
+}
+
+func (s *Server) issuedSession(lookup affinity.Key) string {
+	if s.issuedSessions != nil {
+		if issued := s.issuedSessions.Session(lookup); issued != affinity.NoSession {
+			return issued
+		}
+	}
+	return affinity.NewSession()
 }

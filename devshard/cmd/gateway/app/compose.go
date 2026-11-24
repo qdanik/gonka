@@ -17,6 +17,7 @@ import (
 
 	devshardpkg "devshard"
 	"devshard/cmd/gateway/accounting"
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/api"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
@@ -325,6 +326,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	prober.Settle(sessions.Poster, probeTimeouts, events)
 	prompts := promptTokens(sources.ModelSnapshots, observer)
 	e2e := env.LoadE2E()
+	hostMemory := affinity.NewTracker(affinityLimits(configHolder), escrows.SlotsByParticipant, clock)
 	shadowProbes.Bind(shadow.Binding{
 		Escrows:  escrows,
 		Lifetime: ctx,
@@ -336,6 +338,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		},
 	})
 	races, err := engine.NewEngine(engine.Deps{
+		Affinity:   hostMemory,
 		Picker:     router,
 		Targets:    sessions,
 		Windows:    participants,
@@ -419,6 +422,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		StopTokenVocabulary:     stopTokenVocabulary(sources.ModelSnapshots, observer),
 		PromptTokens:            prompts,
 		StatsTokenizerFallbacks: metrics.NewStatsTokenizerRecorder(telemetry),
+		IssuedSessions:          hostMemory,
 		RequestBodies:           requestBodies,
 	})
 	if err != nil {

@@ -99,6 +99,13 @@ func (s *Scheduler) maxBurnsPerRequest(model string) int64 {
 	return s.settings.Load().For(model).Scheduler.MaxBurnsPerRequest
 }
 
+func (s *Scheduler) affinityMaxBurns() int64 {
+	if s.affinityBurnBudget == nil {
+		return noBurnCap
+	}
+	return s.affinityBurnBudget()
+}
+
 // requestReserve prices this one request the way the chain will charge it. See capacity.md, "The balance floor".
 func requestReserve(profile RequestProfile) uint64 {
 	return uint64(max(profile.InputBytes, 0)) + uint64(max(profile.OutputTokens, 0))

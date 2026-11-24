@@ -4,6 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"devshard/cmd/gateway/affinity"
 )
 
 // Decision is match's total outcome for one nonce: exactly one of serve, burn, probe, hold, decline or overloaded. See rules.md, "1. A committed nonce is always settled".
@@ -13,7 +15,11 @@ type serve struct {
 	waiter           *waiter
 	despiteExclusion bool
 }
-type burn struct{ kind GhostKind }
+
+type burn struct {
+	kind   GhostKind
+	waiter *waiter
+}
 
 type probe struct{ params any }
 
@@ -41,15 +47,21 @@ type waiter struct {
 	abandoned atomic.Bool
 	bound     bool
 
+	homedTo   string
+	target    string
+	exception affinity.Exception
+	skipped   int64
+
 	handoff sync.Mutex
 }
 
 // newWaiter buffers replyCh so the dispatcher's handoff never blocks on the caller.
 func newWaiter(profile RequestProfile, enqueued time.Time) *waiter {
 	queued := &waiter{
-		profile:  profile,
-		enqueued: enqueued,
-		replyCh:  make(chan pickResult, 1),
+		profile:   profile,
+		enqueued:  enqueued,
+		replyCh:   make(chan pickResult, 1),
+		exception: profile.AffinityMiss,
 	}
 	if len(profile.Exclude) > 0 {
 		queued.exclude = make(map[string]bool, len(profile.Exclude))
@@ -58,6 +70,22 @@ func newWaiter(profile RequestProfile, enqueued time.Time) *waiter {
 		}
 	}
 	return queued
+}
+
+func (w *waiter) homeTo(participant string) {
+	w.homedTo, w.target, w.exception = participant, participant, affinity.ExceptionNone
+}
+
+func (w *waiter) unhome(reason affinity.Exception) {
+	w.homedTo, w.target, w.exception = NoTarget, NoTarget, reason
+}
+
+func (w *waiter) lapse(reason affinity.Exception) {
+	w.target, w.exception = NoTarget, reason
+}
+
+func (w *waiter) spentAffinityBudget(maxBurns, requestBurnCap int64) bool {
+	return w.skipped >= maxBurns || w.profile.Burns.Reached(requestBurnCap)
 }
 
 // deliver never blocks: a full or abandoned reply channel means the caller is gone.

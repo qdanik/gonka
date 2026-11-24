@@ -25,7 +25,7 @@ This directory holds the documents that describe behaviour no single package own
 | [architecture.md](./architecture.md) | why the gateway has this shape, the import graph, a nonce's life |
 | [request.md](./request.md) | one request from the socket to the settled nonce, step by step |
 | [race.md](./race.md) | the speculative race: escalation, the crown, deadlines, the drain and the timeout votes |
-| [routing.md](./routing.md) | picking an escrow and a host, the per-escrow dispatcher, every burn reason |
+| [routing.md](./routing.md) | picking an escrow and a host, host affinity, the per-escrow dispatcher, every burn reason |
 | [escrows.md](./escrows.md) | an escrow's life: creation, rotation, depletion, settlement, retirement |
 | [capacity.md](./capacity.md) | admission, the per-host congestion windows, outlier ejection, buffered replies |
 | [accounting.md](./accounting.md) | the nonce ledger: its vocabulary, its surface, every finding and its storage |

@@ -51,6 +51,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			matchWait:           func() time.Duration { return s.matchWait(escrow.Model) },
 			maxConsecutiveBurns: func() int64 { return s.maxConsecutiveBurns(escrow.Model) },
 			maxBurnsPerRequest:  func() int64 { return s.maxBurnsPerRequest(escrow.Model) },
+			affinityMaxBurns:    s.affinityMaxBurns,
 			retirementReserve:   s.retirementReserveFor(escrow),
 			newTimer:            s.newTimer,
 			retire:              s.retire,

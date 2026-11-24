@@ -376,6 +376,12 @@ curl -s http://localhost:8081/v1/chat/completions \
 
 OpenAI path: `POST /v1/chat/completions` → gateway → versiond-router (sticky) → devshardd → mock-openai.
 
+### Gateway affinity on mock hosts (native, no Docker)
+
+`scripts/run-affinity-local.sh OUT_DIR` builds the binaries into `OUT_DIR/bin`, then runs one fresh stack per gateway config, scenario and seed: mock-chain, five hosts (`devshardd` on sqlite behind a prefix-stripping proxy, one mock-dapi and one mock-openai each) and the gateway, all as local processes. `cmd/affinityrun` starts and stops them, drives multi-turn conversations (`sessionload`) and writes `result.json` per run; `affinityrun -aggregate OUT_DIR/runs` prints the tables. Configs, scenarios and the load shape are in `cmd/affinityrun/spec.go`.
+
+mock-openai models a vLLM-style prefix cache when `MOCK_OPENAI_CACHE_TOKENS` is set (a bounded LRU of 16-token prompt blocks). `MOCK_OPENAI_TTFT` is then the base first-token delay, `MOCK_OPENAI_PREFILL_PER_TOKEN` is added for every uncached prompt token, `MOCK_OPENAI_TOKEN_INTERVAL` is the decode cost per output token and `MOCK_OPENAI_WORKERS` with `MOCK_OPENAI_QUEUE` is the concurrency limit. Each response carries `X-Mock-Cached-Tokens`; `/testenv/stats` sums `prompt_tokens` and `cached_prompt_tokens` over executions (a validation replay warms the cache but is not counted); `MOCK_OPENAI_REQUEST_LOG` writes one JSON line per execution with a conversation fingerprint, message count and cached tokens.
+
 ## Generated artifacts
 
 `make gen-compose` writes (gitignored under `testenv/`):

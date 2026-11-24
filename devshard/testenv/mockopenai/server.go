@@ -2,11 +2,14 @@ package mockopenai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +29,11 @@ type Server struct {
 	streamGate chan struct{}
 	capacity   chan struct{}
 	workers    chan struct{}
+	cache      *prefixCache
+	prefill    time.Duration
+	skipReplay bool
+	logMu      sync.Mutex
+	reqLog     io.Writer
 	stats      struct {
 		requestsReceived    atomic.Uint64
 		successfulResponses atomic.Uint64
@@ -33,6 +41,9 @@ type Server struct {
 		timeouts            atomic.Uint64
 		replayHits          atomic.Uint64
 		replayMisses        atomic.Uint64
+		promptTokens        atomic.Uint64
+		cachedPromptTokens  atomic.Uint64
+		validationReplays   atomic.Uint64
 	}
 }
 
@@ -58,6 +69,12 @@ func NewServerWithError(cfg Config) (*Server, error) {
 	if cfg.Workers > 0 {
 		s.capacity = make(chan struct{}, cfg.Workers+cfg.Queue)
 		s.workers = make(chan struct{}, cfg.Workers)
+	}
+	if cfg.PrefixCache.enabled() {
+		s.cache = newPrefixCache(cfg.PrefixCache.CapacityTokens)
+		s.prefill = cfg.PrefixCache.PrefillPerToken
+		s.skipReplay = cfg.PrefixCache.IgnoreReplays
+		s.reqLog = cfg.RequestLog
 	}
 	if s.fault.PauseStream {
 		s.streamGate = make(chan struct{})
@@ -136,6 +153,9 @@ func (s *Server) handleStats(c echo.Context) error {
 		Timeouts:            s.stats.timeouts.Load(),
 		ReplayHits:          s.stats.replayHits.Load(),
 		ReplayMisses:        s.stats.replayMisses.Load(),
+		PromptTokens:        s.stats.promptTokens.Load(),
+		CachedPromptTokens:  s.stats.cachedPromptTokens.Load(),
+		ValidationReplays:   s.stats.validationReplays.Load(),
 	})
 }
 
@@ -229,6 +249,9 @@ func (s *Server) handleChatCompletions(c echo.Context) error {
 		s.stats.replayHits.Add(1)
 		text = sample.Response.Content
 	}
+	if s.cache != nil {
+		f.StreamFirstTokenDelay += s.applyPrefixCache(c, req, text, validate)
+	}
 	if req.Stream {
 		err := s.streamCompletion(c, req, text, body, f, streamGate)
 		if err != nil || f.PartialStream || f.DropFirstChunk || f.EmptyStream {
@@ -245,6 +268,44 @@ func (s *Server) handleChatCompletions(c echo.Context) error {
 	}
 	s.stats.successfulResponses.Add(1)
 	return nil
+}
+
+// applyPrefixCache reports the cached prompt tokens in a header and returns the prefill time of the uncached rest.
+// Only executions (streamed, not a validation replay) count in the stats and pay prefill; a validation replay just warms the cache.
+func (s *Server) applyPrefixCache(c echo.Context, req ChatRequest, reply string, validation bool) time.Duration {
+	if validation {
+		s.stats.validationReplays.Add(1)
+		if s.skipReplay {
+			return 0
+		}
+	}
+	cached, total := s.cache.lookup(renderPrompt(req.Messages, ""), reply)
+	c.Response().Header().Set(CachedTokensHeader, strconv.Itoa(cached))
+	if validation {
+		return 0
+	}
+	s.logRequest(req, cached, total)
+	s.stats.promptTokens.Add(uint64(total))
+	s.stats.cachedPromptTokens.Add(uint64(cached))
+	return time.Duration(total-cached) * s.prefill
+}
+
+// ConversationFingerprint names a conversation by its first message, the part every turn of it repeats.
+func ConversationFingerprint(role, content string) string {
+	sum := sha256.Sum256([]byte(role + "\x1f" + content))
+	return hex.EncodeToString(sum[:6])
+}
+
+func (s *Server) logRequest(req ChatRequest, cached, total int) {
+	if s.reqLog == nil || len(req.Messages) == 0 {
+		return
+	}
+	line, _ := json.Marshal(map[string]any{
+		"t": time.Now().UnixNano(), "fp": ConversationFingerprint(req.Messages[0].Role, req.Messages[0].Content), "msgs": len(req.Messages), "prompt": total, "cached": cached,
+	})
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	_, _ = s.reqLog.Write(append(line, '\n'))
 }
 
 func (s *Server) acquire(ctx context.Context) bool {

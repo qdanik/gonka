@@ -170,6 +170,7 @@ type schedulerConfig struct {
 	gate          chan struct{}
 	health        hostHealth
 	budgetSpent   []string
+	tune          func(*config.Config)
 }
 
 // escrowHolds counts the in-flight holds the commit takes.
@@ -264,6 +265,9 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 
 	settings := config.Defaults()
 	settings.Scheduler.MatchWaitMS = cfg.matchWaitMS
+	if cfg.tune != nil {
+		cfg.tune(&settings)
+	}
 	if cfg.submitBuffer > 0 {
 		settings.Scheduler.DispatchQueueDepth = int64(cfg.submitBuffer)
 	}
@@ -298,6 +302,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		Config:            holder,
 		Observer:          test.observer,
 		Now:               test.clock.Now,
+		AffinityMaxBurns:  func() int64 { return settings.Affinity.MaxBurns },
 		OnEscrowExhausted: test.exhausted.record,
 		OnReserveTaken:    test.reserves.record,
 	})
