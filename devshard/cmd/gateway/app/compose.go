@@ -30,6 +30,7 @@ import (
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/nonces"
+	"devshard/cmd/gateway/peerload"
 	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
@@ -149,6 +150,7 @@ type gateway struct {
 	nonces       *nonces.Recorder
 	events       *journal.Journal
 	warmup       *warmup.Prober
+	peers        *peerload.Plugin
 	hostPings    *hostping.Pinger
 	heights      *heights.Oracle
 	governance   *runtimeParams
@@ -205,15 +207,17 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		}
 	}()
 	txClient, err := chain.NewTxClient(chain.Config{
-		Transport:    sources.Transport,
-		FeeDenom:     configuration.Tx.FeeDenom,
-		FeeAmount:    uint64(configuration.Tx.FeeAmount),
-		GasLimit:     uint64(configuration.Tx.GasLimit),
-		PollInterval: time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
-		PollTimeout:  time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
-		CallTimeout:  time.Duration(configuration.Tx.CallTimeoutMS) * time.Millisecond,
-		Now:          clock,
-		Narrator:     events,
+		Transport:         sources.Transport,
+		FeeDenom:          configuration.Tx.FeeDenom,
+		FeeAmount:         uint64(configuration.Tx.FeeAmount),
+		GasLimit:          uint64(configuration.Tx.GasLimit),
+		RegistryFeeAmount: uint64(configuration.Tx.RegistryFeeAmount),
+		RegistryGasLimit:  uint64(configuration.Tx.RegistryGasLimit),
+		PollInterval:      time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
+		PollTimeout:       time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
+		CallTimeout:       time.Duration(configuration.Tx.CallTimeoutMS) * time.Millisecond,
+		Now:               clock,
+		Narrator:          events,
 	})
 	if err != nil {
 		return nil, err
@@ -239,6 +243,24 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	hosts := perf.NewTracker(configHolder, clock)
 	hosts.SetNarrator(events)
 	recorder.SetCapability(hostCapabilities(hosts, participants, capacity))
+	peers, err := newPeerChannel(configuration.Peer, peerChannelSources{
+		registry:     sources.Registry,
+		txClient:     txClient,
+		signers:      environmentSigner{},
+		participants: participants,
+		hosts:        hosts,
+		capacity:     capacity,
+		configHolder: configHolder,
+		commitPoll:   time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
+		now:          clock,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if peers != nil {
+		observer.Subscribe(func(snapshot chain.PhaseSnapshot) { peers.ObserveChain(snapshot.AllowedCreators, snapshot.BlockHeight) })
+		telemetry.Register(metrics.NewPeerLoadCollector(peers))
+	}
 
 	raceRecorder := metrics.NewRaceRecorder(telemetry, clock, func() time.Duration {
 		return time.Duration(configHolder.Load().Perf.HostStalenessSeconds) * time.Second
@@ -449,6 +471,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		nonces:       recorder,
 		events:       events,
 		warmup:       prober,
+		peers:        peers,
 		hostPings:    hostping.New(configuration.HostPing, escrows, metrics.NewHostPingRecorder(telemetry)),
 		heights:      sources.Heights,
 		governance:   sources.Governance,

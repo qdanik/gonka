@@ -17,7 +17,7 @@ func answeredSamples(tracker *Tracker, participant, model string, count int) {
 // Test flow:
 //  1. Build a tracker with the cap off and a recording narrator, give participant-a/model-a ten answered samples and eject participant-b/model-a, with one in-flight acquire and one context limit recorded.
 //  2. Reset the host stats.
-//  3. Assert the withheld count, that a HostReturned was narrated for the withheld host, that the ejection and the latency signals are gone, and that the in-flight count and the capability survive.
+//  3. Assert the withheld count, that a HostReturned was narrated for the withheld host, that the ejection and the latency signals are gone, and that the in-flight counts, per host and per model, and the capability survive.
 func TestResetHostStatsForgetsEveryHostAndNarratesTheReturns(t *testing.T) {
 	perf := noCap(testPerf())
 	tracker := newTestTracker(perf, fixedNow(testEpoch))
@@ -25,7 +25,7 @@ func TestResetHostStatsForgetsEveryHostAndNarratesTheReturns(t *testing.T) {
 	tracker.SetNarrator(narrator)
 	answeredSamples(tracker, "participant-a", "model-a", 12)
 	failAllConsecutive(tracker, "participant-b", "model-a", perf.ConsecutiveFailThreshold)
-	tracker.Acquire("participant-a")
+	tracker.Acquire("participant-a", "model-a")
 	tracker.RecordContextLimit("participant-a", "model-a", 4096)
 	_, known := tracker.FirstContentP75("participant-a", "model-a")
 	require.True(t, known, "the latency ring must be warm before the reset")
@@ -42,6 +42,7 @@ func TestResetHostStatsForgetsEveryHostAndNarratesTheReturns(t *testing.T) {
 	require.Equal(t, Pressure{}, tracker.Pressure("participant-a", "model-a"))
 	require.Empty(t, tracker.Snapshot())
 	require.Equal(t, 1, tracker.inflight.count("participant-a"))
+	require.Equal(t, []InflightPair{{Participant: "participant-a", Model: "model-a", Requests: 1}}, tracker.InflightPairs())
 	limit, _, _, _ := tracker.Capability("participant-a", "model-a")
 	require.Equal(t, uint64(4096), limit)
 }

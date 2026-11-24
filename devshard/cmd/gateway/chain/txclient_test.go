@@ -41,7 +41,7 @@ func TestNewTxClientRequiresATransport(t *testing.T) {
 
 // Test flow:
 //  1. Call NewTxClient with only a transport set, leaving every other field zero.
-//  2. Assert fee denom, fee amount, gas limit, poll interval, poll timeout, call timeout and the clock all fall back to their documented defaults.
+//  2. Assert fee denom, fee amount, gas limit, registry fee amount, registry gas limit, poll interval, poll timeout, call timeout and the clock all fall back to their documented defaults.
 func TestNewTxClientAppliesDefaultsForZeroFields(t *testing.T) {
 	client, err := NewTxClient(Config{Transport: newFakeTransport()})
 	if err != nil {
@@ -55,6 +55,12 @@ func TestNewTxClientAppliesDefaultsForZeroFields(t *testing.T) {
 	}
 	if client.gasLimit != DefaultGasLimit {
 		t.Errorf("gasLimit = %d, want %d", client.gasLimit, DefaultGasLimit)
+	}
+	if client.registryFeeAmount != DefaultRegistryFeeAmount {
+		t.Errorf("registryFeeAmount = %d, want %d", client.registryFeeAmount, DefaultRegistryFeeAmount)
+	}
+	if client.registryGasLimit != DefaultRegistryGasLimit {
+		t.Errorf("registryGasLimit = %d, want %d", client.registryGasLimit, DefaultRegistryGasLimit)
 	}
 	if client.pollInterval != DefaultPollInterval {
 		t.Errorf("pollInterval = %v, want %v", client.pollInterval, DefaultPollInterval)

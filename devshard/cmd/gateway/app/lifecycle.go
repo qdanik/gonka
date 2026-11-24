@@ -77,7 +77,7 @@ type bootStep struct {
 	start func() error
 }
 
-// bootOrder is the ten-step contract every boot follows. See operations.md, "Boot".
+// bootOrder is the eleven-step contract every boot follows. See operations.md, "Boot".
 func (g *gateway) bootOrder(ctx, backgroundCtx context.Context, settings *config.Config, started *bootState) []bootStep {
 	return []bootStep{
 		{name: "chain observer", start: func() error { g.observer.Start(backgroundCtx); return nil }},
@@ -96,6 +96,7 @@ func (g *gateway) bootOrder(ctx, backgroundCtx context.Context, settings *config
 			started.republished = g.republishOnDevshardWrites(backgroundCtx, started.unopenedEscrows)
 			return nil
 		}},
+		{name: "peer channel", start: func() error { return g.peers.Start(backgroundCtx) }},
 		{name: "http listener", start: func() error {
 			started.listening = make(chan error, 1)
 			go func() { started.listening <- g.server.ListenAndServe() }()
@@ -134,6 +135,10 @@ type httpListener interface {
 }
 type stopper interface{ Stop() }
 
+type stopperFunc func()
+
+func (stop stopperFunc) Stop() { stop() }
+
 // idleConnections is satisfied by *http.Client, whose pooled sockets nothing above it closes.
 type idleConnections interface{ CloseIdleConnections() }
 
@@ -144,6 +149,7 @@ type shutdownParts struct {
 	dispatchers     stopper
 	escrowLifecycle stopper
 	chainObserver   stopper
+	peerChannel     stopper
 	nonceSweep      stopper
 	sessions        io.Closer
 	events          io.Closer
@@ -154,7 +160,7 @@ type shutdownParts struct {
 	publicAPI       idleConnections
 }
 
-// shutdownOrder is the thirteen-step contract every shutdown follows. See operations.md, "Shutdown".
+// shutdownOrder is the fourteen-step contract every shutdown follows. See operations.md, "Shutdown".
 func shutdownOrder(parts shutdownParts) []shutdownStep {
 	return []shutdownStep{
 		{name: "http server", stop: stopListener(parts.listener, parts.endRequests)},
@@ -162,6 +168,7 @@ func shutdownOrder(parts shutdownParts) []shutdownStep {
 		{name: "dispatchers", stop: waitFor(parts.dispatchers)},
 		{name: "escrow lifecycle", stop: waitFor(parts.escrowLifecycle)},
 		{name: "chain observer", stop: waitFor(parts.chainObserver)},
+		{name: "peer channel", stop: waitFor(parts.peerChannel)},
 		{name: "nonce sweep", stop: waitFor(parts.nonceSweep)},
 		{name: "escrow sessions", stop: closeOf(parts.sessions), needsQuiesced: true},
 		{name: "journal", stop: closeWithin(parts.events, journalCloseFloor)},
@@ -276,6 +283,7 @@ func (g *gateway) partsToStop() shutdownParts {
 		dispatchers:     g.router,
 		escrowLifecycle: g.manager,
 		chainObserver:   g.observer,
+		peerChannel:     stopperFunc(g.peers.Wait),
 		nonceSweep:      g.nonces,
 		sessions:        g.escrows,
 		events:          g.events,

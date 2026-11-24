@@ -72,6 +72,27 @@ func TestEngineTimingsReachTheSnapshotFromTheEnvironment(t *testing.T) {
 }
 
 // Test flow:
+//  1. Build a config with the registry fee and gas limit set via environment values.
+//  2. Assert both reach the registry fields and the shared fee and gas limit keep their defaults.
+func TestRegistryTxSettingsReachTheConfigFromTheEnvironment(t *testing.T) {
+	t.Parallel()
+	built, err := Build(env.Values{
+		RegistryTxFeeAmount: int64Pointer(600_000),
+		RegistryTxGasLimit:  int64Pointer(300_000),
+	}, Overrides{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if built.Tx.RegistryFeeAmount != 600_000 || built.Tx.RegistryGasLimit != 300_000 {
+		t.Fatalf("registry fee and gas limit = %d, %d, want 600000, 300000", built.Tx.RegistryFeeAmount, built.Tx.RegistryGasLimit)
+	}
+	if defaults := Defaults(); built.Tx.FeeAmount != defaults.Tx.FeeAmount || built.Tx.GasLimit != defaults.Tx.GasLimit {
+		t.Fatalf("shared fee and gas limit = %d, %d, want the defaults", built.Tx.FeeAmount, built.Tx.GasLimit)
+	}
+}
+
+// Test flow:
 //  1. Set every engine timing and the chain snapshot max age in the environment, then set a conflicting value for each in the overrides.
 //  2. Build a config from both.
 //  3. Assert every built field takes the override's value over the environment's.
