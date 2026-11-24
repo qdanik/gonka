@@ -26,6 +26,7 @@ POLL_SECONDS=2
 CALL_TIMEOUT=30
 DEFAULT_DRAIN_TIMEOUT=900
 DEFAULT_READY_TIMEOUT=300
+ALIVE_TIMEOUT=30
 
 IMAGE=
 DRAIN_TIMEOUT=$DEFAULT_DRAIN_TIMEOUT
@@ -127,6 +128,19 @@ drained() { [[ $(open_work "$1") == "0 0" ]]; }
 served_colour() { "${COMPOSE[@]}" exec -T nginx wget -qO- http://127.0.0.1/_colour; }
 serves_colour() { [[ $(served_colour 2>/dev/null) == "$1" ]]; }
 
+# The new colour answers /v1/models and runs every escrow imported active that it has not retired itself.
+new_colour_serves() {
+  answers_models "$NEW_PORT" || return 1
+  call "$NEW_PORT" GET /v1/admin/devshards 2>/dev/null && [[ $RESPONSE_STATUS == 200 ]] &&
+    jq -e '.devshards as $rows | all($ARGS.positional[]; . as $id | any($rows[];
+      .id == $id and (.runtime != null or (.active | not) or .gone_from_chain or .settlement_pending or ((.settle_tx_hash // "") != ""))))' \
+      --args ${IMPORTED_SERVING[@]+"${IMPORTED_SERVING[@]}"} <<<"$RESPONSE_BODY" >/dev/null
+}
+
+wait_for_new_colour() { wait_until "$NEW to run the escrows imported to it" "$ALIVE_TIMEOUT" new_colour_serves; }
+
+require_new_colour() { wait_for_new_colour || die "$NEW does not run the escrows imported to it, $1"; }
+
 switch_nginx() {
   "${COMPOSE[@]}" exec -T nginx nginx -t >/dev/null 2>&1 || return 1
   "${COMPOSE[@]}" exec -T nginx nginx -s reload >/dev/null 2>&1
@@ -157,6 +171,7 @@ SETTINGS_CHANGED=0
 CONF_PLACED=0
 DEACTIVATED=()
 IMPORTED=()
+IMPORTED_SERVING=()
 OLD_SETTINGS=
 PREVIOUS_CONF=$(mktemp)
 
@@ -168,12 +183,40 @@ reactivate() { # id deadline: the old colour refuses with 409 "still draining" w
   done
 }
 
+report_after_switch() {
+  local left_on_old id idle_on_old= untouched_on_old= unconfirmed= still_on_old
+  left_on_old=$(jq -nr --argjson handed "$HANDOVER" '($handed.first + $handed.rest | map(.id)) - $ARGS.positional | join(" ")' \
+    --args ${IMPORTED[@]+"${IMPORTED[@]}"})
+  for id in $left_on_old; do
+    if [[ -d data/$NEW/$STORAGE_PREFIX$id ]]; then
+      unconfirmed+=" $id"
+    elif [[ " ${DEACTIVATED[*]-} " == *" $id "* ]]; then
+      idle_on_old+=" $id"
+    else
+      untouched_on_old+=" $id"
+    fi
+  done
+  still_on_old=$idle_on_old$untouched_on_old
+  if wait_for_new_colour 2>/dev/null; then
+    log "failed after the switch: nothing is rolled back; $NEW serves, $OLD still runs with what is left of its escrows, and rotation_enabled stays off on $OLD; imported so far: ${IMPORTED[*]-none}; still on $OLD:${still_on_old:- none}; copy in data/$NEW with no confirmed import (look at its list before importing again):${unconfirmed:- none} (README.md, \"Upgrading without downtime\")"
+    return
+  fi
+  log "failed after the switch and $NEW does not run every escrow imported to it: nginx sends every request to $NEW, so those models are not answered, and nothing is rolled back; rotation_enabled stays off on $OLD, and on $NEW it is off unless the script had turned it on"
+  log "imported to $NEW: ${IMPORTED[*]-none}"
+  log "copy in data/$NEW with no confirmed import (treat as imported):${unconfirmed:- none}"
+  log "deactivated on $OLD, not copied (inactive, no colour serves them):${idle_on_old:- none}"
+  log "not yet handed over, unchanged on $OLD (which nginx does not reach):${untouched_on_old:- none}"
+  log "recover: 1. read docker compose -f $COMPOSE_FILE ps and logs gateway-$NEW, then restart it (docker compose -f $COMPOSE_FILE restart gateway-$NEW); it reloads its imported escrows from data/$NEW and continues their nonces; 2. GET /v1/admin/devshards on port $NEW_PORT: an active row with no runtime is still unserved"
+  log "never activate an imported or copied escrow on $OLD: $NEW holds its session and may have spent nonces that $OLD's copy would send again; do not run upgrade.sh again or move data/$NEW aside; hand over the others by hand once $NEW serves (docs/runbook.md, \"Upgrade\")"
+}
+
 rollback() {
   local status=$? id
   trap - EXIT
   if ((FINISHED || SWITCHED)); then
     rm -f "$PREVIOUS_CONF"
-    ((FINISHED)) || log "failed after the switch: nothing is rolled back; $NEW serves, $OLD still runs with what is left of its escrows, and rotation_enabled stays off on both; imported so far: ${IMPORTED[*]-none} (README.md, \"Upgrading without downtime\")"
+    set +e
+    ((FINISHED)) || report_after_switch
     exit "$status"
   fi
   set +e
@@ -268,14 +311,16 @@ hand_over() { # wave name
   done
   while IFS= read -r row; do
     id=$(jq -r .id <<<"$row")
+    active=$(jq -r .active <<<"$row")
     admin "$OLD_PORT" GET /v1/admin/devshards
     jq -e --arg id "$id" '.devshards[] | select(.id == $id) | (.gone_from_chain or .settlement_pending or ((.settle_tx_hash // "") != "")) | not' \
       <<<"$RESPONSE_BODY" >/dev/null || die "escrow $id was parked or left the chain on $OLD during the handover; not importing it"
-    if [[ $(jq -r .active <<<"$row") != true && ! -d data/$OLD/$STORAGE_PREFIX$id ]]; then
+    if [[ $active != true && ! -d data/$OLD/$STORAGE_PREFIX$id ]]; then
       admin "$NEW_PORT" POST /v1/admin/devshards "$(jq -c '{id, model, private_key_env, activate: false}' <<<"$row")"
     else
       admin "$NEW_PORT" POST /v1/admin/devshards/import "$(jq -c --arg source "$HANDOVER_ROOT/$OLD/$STORAGE_PREFIX$id" \
         '{id, model, private_key_env, active, rotation_role, rotation_epoch, route_prefix, source_path: $source}' <<<"$row")"
+      [[ $active != true ]] || IMPORTED_SERVING+=("$id")
     fi
     IMPORTED+=("$id")
     log "escrow $id handed over to $NEW"
@@ -285,6 +330,8 @@ hand_over() { # wave name
 log "wave 1: one escrow per model"
 hand_over first
 
+require_new_colour "so nginx is not switched"
+
 log "switching nginx to $NEW"
 cp "$ACTIVE_CONF" "$PREVIOUS_CONF"
 place_active_conf "nginx/colour-$NEW.conf"
@@ -292,6 +339,7 @@ CONF_PLACED=1
 switch_nginx || die "nginx refused the new upstream or the reload failed"
 SWITCHED=1
 wait_until "nginx to serve $NEW" "$READY_TIMEOUT" serves_colour "$NEW" || die "nginx did not report $NEW after the reload"
+require_new_colour "after the switch"
 
 log "wave 2: the remaining escrows"
 hand_over rest
@@ -319,6 +367,7 @@ if [[ -z $PARKED ]]; then
     log "$OLD still has (open requests, owed timeout votes) = ($(open_work "$OLD_PORT" 2>/dev/null || echo unknown)) after ${DRAIN_TIMEOUT}s; stopping it cuts the requests and leaves those votes unposted, so finalization charges their nonces in full"
   fi
 fi
+require_new_colour "so $OLD is not stopped"
 FINISHED=1
 rm -f "$PREVIOUS_CONF"
 if [[ -n $PARKED ]]; then
