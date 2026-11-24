@@ -115,6 +115,7 @@ func (p *poller) newLink(instance peerInstance) *peerLink {
 		DialContext:     p.dial,
 		TLSClientConfig: p.verifier.ClientTLSConfig(p.identity, instance.ID),
 		Protocols:       protocols,
+		HTTP2:           &http.HTTP2Config{SendPingTimeout: pollRequestTimeout, PingTimeout: pollRequestTimeout},
 
 		TLSHandshakeTimeout:    pollRequestTimeout,
 		MaxResponseHeaderBytes: maxHeaderBytes,
