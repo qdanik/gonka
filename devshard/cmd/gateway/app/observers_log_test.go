@@ -127,3 +127,35 @@ func TestThePhaseNarratorHandsItsChangesToTheJournal(t *testing.T) {
 		t.Fatalf("recorded %+v, want exactly three chain lines: the epoch-less first snapshot announces no epoch", recorded)
 	}
 }
+
+// Test flow:
+//  1. Build a tracedDispatches over a dispatch recorder and a journal.
+//  2. Burn one nonce as `affinity_skip` and one as `participant_window_full_no_send`.
+//  3. Assert the affinity counter moved once, for the first burn only, and both are still counted by reason.
+func TestOnlyAnAffinitySkipMovesTheAffinityBurnCounter(t *testing.T) {
+	telemetry := metrics.New()
+	events := newTestJournal(t)
+	dispatches := tracedDispatches{recorder: metrics.NewDispatchRecorder(telemetry), events: events}
+
+	dispatches.GhostBurned("escrow-1", scheduler.Burn{Nonce: 1, Reason: scheduler.GhostReasonAffinitySkip})
+	dispatches.GhostBurned("escrow-1", scheduler.Burn{Nonce: 2, Reason: scheduler.GhostReasonWindowFull})
+	events.Flush()
+
+	families, err := telemetry.Registry().Gather()
+	if err != nil {
+		t.Fatalf("Gather() = %v", err)
+	}
+	counted := false
+	for _, family := range families {
+		if family.GetName() != "devshard_gateway_affinity_burns_total" {
+			continue
+		}
+		counted = true
+		if got := family.GetMetric()[0].GetCounter().GetValue(); got != 1 {
+			t.Fatalf("affinity burns = %v, want 1", got)
+		}
+	}
+	if !counted {
+		t.Fatal("the affinity burn counter was never registered")
+	}
+}

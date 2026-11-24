@@ -69,3 +69,27 @@ func TestDispatchRecorderDropsTheSeriesItWroteForAnUntrimmedEscrowID(t *testing.
 	expectSeriesCount(t, telemetry, "devshard_gateway_nonce_holds_total", 0)
 	expectSeriesCount(t, telemetry, "devshard_gateway_burn_budget_exhausted_total", 0)
 }
+
+// Test flow:
+//  1. Build a `DispatchRecorder` and record two affinity hits for one model, one for another, two exceptions for one reason and one for another, and three affinity burns.
+//  2. Assert each hit and exception series is counted by its model and reason, and the burns are one unlabelled total.
+func TestTheDispatchRecorderCountsAffinityHitsExceptionsAndBurns(t *testing.T) {
+	telemetry := New()
+	recorder := NewDispatchRecorder(telemetry)
+
+	recorder.AffinityLanded("model-a")
+	recorder.AffinityLanded("model-a")
+	recorder.AffinityLanded("model-b")
+	recorder.AffinityException("model-a", "gate_blocked")
+	recorder.AffinityException("model-a", "gate_blocked")
+	recorder.AffinityException("model-a", "new_key")
+	recorder.AffinityBurned()
+	recorder.AffinityBurned()
+	recorder.AffinityBurned()
+
+	expectCounter(t, telemetry, "devshard_gateway_affinity_hits_total", labels{"model": "model-a"}, 2)
+	expectCounter(t, telemetry, "devshard_gateway_affinity_hits_total", labels{"model": "model-b"}, 1)
+	expectCounter(t, telemetry, "devshard_gateway_affinity_exceptions_total", labels{"model": "model-a", "reason": "gate_blocked"}, 2)
+	expectCounter(t, telemetry, "devshard_gateway_affinity_exceptions_total", labels{"model": "model-a", "reason": "new_key"}, 1)
+	expectCounter(t, telemetry, "devshard_gateway_affinity_burns_total", labels{}, 3)
+}

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sync"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/safemath"
 	"devshard/types"
@@ -17,6 +17,7 @@ const (
 	nonceInFlightMargin      uint64 = 200
 	nonceCeilingPerMaxMargin uint64 = 2
 	unboundedAttemptsToFund         = 2
+	noBurnCap                int64  = math.MaxInt64
 	noBurns                         = 0
 	unusableBurns                   = math.MaxInt
 	forcedSendOff            int64  = 0
@@ -74,7 +75,12 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			if ceiling != ExhaustionNone {
 				return Escrow{}, noCapacity(ceiling)
 			}
-			return s.checkPinnedBurnCap(profile, snapshot, candidate, queued)
+			pinned, err := s.checkPinnedBurnCap(profile, snapshot, candidate, queued)
+			if err != nil {
+				return Escrow{}, err
+			}
+			settleTarget(queued, profile, s.pinnedTargetFound(candidate, profile, snapshot, queued))
+			return pinned, nil
 		}
 		if retired, ok := s.retiredForEscalation(profile, snapshot.MaxNonce); ok {
 			if belowBalanceFloor(retired, request) {
@@ -87,17 +93,20 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	// Read here as well as at dispatch: an escrow whose whole group it refuses can never serve.
 	ranking := escrowRanking{
 		profile: profile, snapshot: snapshot, queued: queued, avoided: avoided,
-		retirement: retirement, request: request, attempts: s.attemptsToFund(profile.Model), limits: s.burnLimits(profile.Model),
+		retirement: retirement, request: request, attempts: s.attemptsToFund(profile.Model), limits: s.burnLimits(profile.Model), maxBurns: s.affinityMaxBurns(),
 		reachable: reachableByTrust(s.participants(profile.Model)),
 		fleet:     s.fleetGates(profile.Model, snapshot),
 		ahead:     s.queuedAhead(candidates),
+		targeted:  s.targetLoads(candidates, profile),
 	}
 	regular := s.rankCandidates(candidates, ranking, false)
 	picked, admitted, declined := regular.picked, regular.admitted, regular.declined
 	moneyDeclined, pastBurnCap := regular.moneyDeclined, regular.pastBurnCap
+	found := regular.target
 	if picked < 0 && regular.passedOverForHosts == 0 {
 		reserve := s.rankCandidates(candidates, ranking, true)
 		picked, admitted = reserve.picked, admitted+reserve.admitted
+		found = max(found, reserve.target)
 		moneyDeclined = moneyDeclined || reserve.moneyDeclined
 		pastBurnCap = pastBurnCap || reserve.pastBurnCap
 		if reserve.declined != ExhaustionNone {
@@ -117,7 +126,38 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		}
 		return Escrow{}, noCapacity(declined)
 	}
+	settleTarget(queued, profile, found)
 	return candidates[picked], nil
+}
+
+func (s *Scheduler) pinnedTargetFound(candidate Escrow, profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter) targetFound {
+	if profile.Target == NoTarget || profile.Escalation {
+		return targetAbsent
+	}
+	gates := s.escrowGates(candidate, s.fleetGates(profile.Model, snapshot))
+	pinned := []Escrow{candidate}
+	ranking := escrowRanking{
+		profile: profile, queued: queued, ahead: s.queuedAhead(pinned), targeted: s.targetLoads(pinned, profile),
+		maxBurns: s.affinityMaxBurns(), limits: s.burnLimits(profile.Model),
+	}
+	_, found := stepsToTarget(candidate, gates, ranking, 0)
+	return found
+}
+
+func settleTarget(queued *waiter, profile RequestProfile, found targetFound) {
+	if queued == nil || profile.Target == NoTarget || profile.Escalation {
+		return
+	}
+	switch found {
+	case targetReached:
+		queued.homeTo(profile.Target)
+	case targetBlocked:
+		queued.unhome(affinity.ExceptionGateBlocked)
+	case targetOverBurnCap:
+		queued.unhome(affinity.ExceptionMaxBurns)
+	default:
+		queued.unhome(affinity.ExceptionNotInGroup)
+	}
 }
 
 // escrowRanking is what one pick reads for every candidate it ranks.
@@ -129,10 +169,12 @@ type escrowRanking struct {
 	retirement uint64
 	request    uint64
 	attempts   int
+	maxBurns   int64
 	limits     burnLimits
 	reachable  func(Escrow) bool
 	fleet      availability
 	ahead      []uint64
+	targeted   []targetLoad
 }
 
 type rankedPick struct {
@@ -141,6 +183,7 @@ type rankedPick struct {
 	declined           ExhaustionReason
 	passedOverForHosts int
 	moneyDeclined      bool
+	target             targetFound
 	pastBurnCap        bool
 }
 
@@ -174,6 +217,7 @@ func (tier *scoreTier) offer(index int, rank pickRank) {
 // rankCandidates scores one tier, regulars or reserves, and counts the ones it passed over for their hosts. See routing.md, "A reserve escrow".
 func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, reserveTier bool) rankedPick {
 	residue, funded, thin := newScoreTier(), newScoreTier(), newScoreTier()
+	reaching, reachingThin := newReachTier(), newReachTier()
 	result := rankedPick{picked: -1}
 	for index, candidate := range candidates {
 		if candidate.IsReserve != reserveTier {
@@ -208,15 +252,31 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 			result.passedOverForHosts++
 			continue
 		}
-		forecast := s.burnsToServe(candidate, ranking.fleet, ranking.queued, ranking.ahead[index], ranking.limits.consecutive)
+		gates := s.escrowGates(candidate, ranking.fleet)
+		forecast := expectedBurns(candidate, gates, ranking.queued, ranking.ahead[index], ranking.limits.consecutive)
 		if ranking.limits.refuses(ranking.profile.Burns, forecast) {
 			result.passedOverForHosts++
 			result.pastBurnCap = true
+			if ranking.targeted != nil {
+				_, found := stepsToTarget(candidate, gates, ranking, index)
+				result.target = max(result.target, min(found, targetOverBurnCap))
+			}
 			continue
 		}
 		rank := pickRank{burns: forecast.burns, load: (float64(candidate.ActiveUsers) + float64(ranking.ahead[index])) / weight}
 		if !forecast.usable {
 			rank.burns = unusableBurns
+		}
+		if ranking.targeted != nil {
+			steps, found := stepsToTarget(candidate, gates, ranking, index)
+			result.target = max(result.target, found)
+			switch {
+			case found != targetReached:
+			case !reserveTier && !affordsAttempts(candidate, ranking.request, ranking.attempts):
+				reachingThin.offer(index, steps, rank)
+			default:
+				reaching.offer(index, steps, rank)
+			}
 		}
 		switch {
 		case !reserveTier && !affordsAttempts(candidate, ranking.request, ranking.attempts):
@@ -234,6 +294,11 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 	}
 	if len(tied) == 0 {
 		tied = thin.tied
+	}
+	if len(reaching.tied) > 0 {
+		tied = reaching.tied
+	} else if len(reachingThin.tied) > 0 {
+		tied = reachingThin.tied
 	}
 	switch len(tied) {
 	case 0:
@@ -303,80 +368,6 @@ func noCapacity(reason ExhaustionReason) error {
 // pinnedEscrowShort keeps every reader that classifies a pick by ErrNoEscrowCapacity or ErrInsufficientBalance answering as before.
 func pinnedEscrowShort() error {
 	return fmt.Errorf("%w: %w: %w", ErrPinnedEscrowShort, ErrNoEscrowCapacity, types.ErrInsufficientBalance)
-}
-
-type burnLimits struct {
-	consecutive int64
-	perRequest  int64
-}
-
-func (limits burnLimits) refuses(tally *BurnTally, forecast burnForecast) bool {
-	return forecast.usable && tally.WouldExceed(limits.perRequest, forecast.charged)
-}
-
-func (s *Scheduler) burnLimits(model string) burnLimits {
-	if s.settings == nil {
-		return burnLimits{}
-	}
-	return burnLimits{consecutive: s.maxConsecutiveBurns(model), perRequest: s.maxBurnsPerRequest(model)}
-}
-
-func (s *Scheduler) checkPinnedBurnCap(profile RequestProfile, snapshot chain.PhaseSnapshot, pinned Escrow, queued *waiter) (Escrow, error) {
-	limits := s.burnLimits(profile.Model)
-	if profile.Burns == nil || limits.perRequest <= BurnCapOff {
-		return pinned, nil
-	}
-	forecast := s.burnsToServe(pinned, s.fleetGates(profile.Model, snapshot), queued, s.queuedAheadOf(pinned), limits.consecutive)
-	if limits.refuses(profile.Burns, forecast) {
-		return Escrow{}, refuseCappedAtPick(fmt.Sprintf("escrow %s", pinned.ID), limits.perRequest)
-	}
-	return pinned, nil
-}
-
-func refuseCappedAtPick(subject string, limit int64) error {
-	return fmt.Errorf("%s: the slot that can take the request is more burns away than it has left of its cap of %d burned nonces: %w", subject, limit, ErrRequestCapped)
-}
-
-type burnForecast struct {
-	burns   int
-	charged int
-	usable  bool
-}
-
-func (s *Scheduler) burnsToServe(candidate Escrow, fleet availability, queued *waiter, queuedAhead uint64, forceAfter int64) burnForecast {
-	return expectedBurns(candidate, fleet.forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate)), queued, queuedAhead, forceAfter)
-}
-
-func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedAhead uint64, forceAfter int64) burnForecast {
-	if candidate.Session == nil {
-		return burnForecast{}
-	}
-	slots := candidate.Session.SlotParticipants()
-	if len(slots) == 0 {
-		return burnForecast{}
-	}
-	cursor := int((candidate.Session.LatestNonce() + 1 + queuedAhead) % uint64(len(slots)))
-	var forecast burnForecast
-	reachable := sync.OnceValue(func() bool {
-		canServe, _, _, _ := servable(queued, slots, gates)
-		return canServe
-	})
-	for step := range slots {
-		slot := slots[(cursor+step)%len(slots)]
-		if gates.blocks(slot, queued) == blockNone {
-			forecast.usable = true
-			return forecast
-		}
-		if forceAfter > forcedSendOff && int64(forecast.burns) >= forceAfter && gates.servingOverFullWindows().blocks(slot, queued) == blockNone && reachable() {
-			forecast.usable = true
-			return forecast
-		}
-		forecast.burns++
-		if !queued.exclude[slot] && !gates.shadowMember(slot) {
-			forecast.charged++
-		}
-	}
-	return forecast
 }
 
 // unusableWeight holds for a weight no ratio can be taken against. See routing.md, "Picking an escrow".

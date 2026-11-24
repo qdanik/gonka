@@ -14,6 +14,7 @@ const (
 	GhostReasonAbandoned           = "request_abandoned_before_dispatch"
 	GhostReasonPrepareFailed       = "nonce_spent_on_failed_prepare"
 	GhostReasonAbsentFromChain     = "participant_absent_from_chain_no_send"
+	GhostReasonAffinitySkip        = "affinity_skip"
 	NoRequestID                    = ""
 )
 

@@ -13,6 +13,16 @@ const (
 	processorsPerPromptCount = 2
 )
 
+// The affinity defaults are also the upper bounds validate.go enforces, except max burns and min cached tokens, which have their own ceilings there.
+const (
+	defaultAffinityTTLMS           = 600_000
+	defaultAffinityMaxEntries      = 100_000
+	defaultAffinityMaxPinAgeMS     = 3_600_000
+	defaultAffinityShareCap        = 125
+	defaultAffinityMaxBurns        = 2
+	defaultAffinityMinCachedTokens = 4_096
+)
+
 func Defaults() Config {
 	return Config{
 		Server: Server{
@@ -138,6 +148,15 @@ func Defaults() Config {
 			MaxBurnsPerRequest:  16,
 			DispatchQueueDepth:  1_024,
 			WarmNewEscrows:      true,
+		},
+		Affinity: Affinity{
+			Enabled:         false,
+			TTLMS:           defaultAffinityTTLMS,
+			MaxEntries:      defaultAffinityMaxEntries,
+			MaxPinAgeMS:     defaultAffinityMaxPinAgeMS,
+			ShareCap:        defaultAffinityShareCap,
+			MaxBurns:        defaultAffinityMaxBurns,
+			MinCachedTokens: defaultAffinityMinCachedTokens,
 		},
 		TimeoutSweep: TimeoutSweep{
 			BudgetPerTick: 8,

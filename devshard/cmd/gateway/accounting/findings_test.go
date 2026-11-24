@@ -724,3 +724,21 @@ func TestDriftedProbeReceiptsAreMeasuredAgainstTheProbesToo(t *testing.T) {
 		t.Fatalf("finding = %d of %d, want 22 drifted receipts against all 40 delivered", finding.Part, finding.Whole)
 	}
 }
+
+// Test flow:
+//  1. Build a record of 100 assigned nonces, all finished and used, with 30 ghosted under "affinity_skip".
+//  2. Compute the findings.
+//  3. Assert no `FindingGatewayThrottled` and no `FindingStateDiverged` code appears, so a burn the gateway chose to reach a host accuses neither the gateway nor a host.
+func TestAffinitySkipBurnsAreNotReportedAsThrottling(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: "affinity_skip"},
+		Count:      30,
+	}}
+
+	codes := codesOf(findingsFor(record))
+
+	if slices.Contains(codes, FindingGatewayThrottled) || slices.Contains(codes, FindingStateDiverged) {
+		t.Errorf("an affinity burn was reported as a fault: %v", codes)
+	}
+}

@@ -34,6 +34,8 @@ const maxAcquireAttempts = 10
 // local capacity bound before retrying PickNode.
 const fallbackSlotWait = 100 * time.Millisecond
 
+const noSessionKey = ""
+
 // Engine implements devshard.InferenceEngine for the standalone devshardd binary.
 // It acquires a locked ML node via NodeManager gRPC, POSTs directly, and releases
 // with an outcome reflecting the result.
@@ -105,7 +107,7 @@ func NewEngine(
 func (e *Engine) Execute(ctx context.Context, req devshard.ExecuteRequest) (*devshard.ExecuteResult, error) {
 	return executeWithRecovery(ctx, req, e.payloadRead, e.phase.EpochID(), func(ctx context.Context) (*devshard.ExecuteResult, error) {
 		result, err := executeInference(ctx, req, e.payloadStore, e.phase.EpochID(), func(ctx context.Context, model string, body []byte) (*http.Response, error) {
-			return e.executeMLRequest(ctx, model, req.EscrowID, body)
+			return e.executeMLRequest(ctx, model, req.EscrowID, req.SessionKey, body)
 		}, e.chainParams, e.logprobsOptimizationEnabled, func() int {
 			return e.vocabularySize(ctx, req.Model)
 		})
@@ -148,8 +150,9 @@ func executeWithRecovery(
 	return run(ctx)
 }
 
-func (e *Engine) executeMLRequest(ctx context.Context, model, escrowID string, body []byte) (*http.Response, error) {
-	resp, err := e.doWithLockedNode(ctx, observability.PathExecute, model, escrowID, func(endpoint string) (_ *http.Response, err error) {
+func (e *Engine) executeMLRequest(ctx context.Context, model, escrowID, sessionKey string, body []byte) (*http.Response, error) {
+	route := prefixRoute{sessionKey: sessionKey, hashes: prefixHashesFrom(ctx)}
+	resp, err := e.doWithLockedNode(ctx, observability.PathExecute, model, escrowID, route, func(endpoint string) (_ *http.Response, err error) {
 		callCtx, op := observability.Request.StartMLNodeCall(ctx, model, endpoint)
 		defer op.FinishErr(&err)
 
@@ -159,6 +162,12 @@ func (e *Engine) executeMLRequest(ctx context.Context, model, escrowID string, b
 			return nil, observability.Classify(observability.ReasonApplicationErr, observability.WhereEngineMLNodeCall, reqErr)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		if validSessionKeyHeader(route.sessionKey) {
+			httpReq.Header.Set("X-Session-Key", route.sessionKey)
+		}
+		if len(route.hashes) > 0 {
+			httpReq.Header.Set("X-Prefix-Hashes", prefixHashesHeader(route.hashes))
+		}
 		observability.InjectRequestContext(callCtx, httpReq.Header)
 		observability.AttachRequestID(httpReq)
 		return e.httpClient.Do(httpReq)
@@ -173,7 +182,8 @@ func (e *Engine) executeMLRequest(ctx context.Context, model, escrowID string, b
 // node in the passive cache (Observe), POSTs, and Releases. If dapi is
 // unreachable it falls back to mgr.PickNode round-robin without lock/release.
 // ResourceExhausted (dapi up, no free nodes) stays on the gRPC retry path.
-// escrowID is forwarded on Acquire so dapi can attribute per-escrow load.
+// escrowID is forwarded on Acquire so dapi can attribute per-escrow load;
+// route carries the session key and prompt prefix hashes for node affinity.
 // A validation reserves one credit for the whole call, across node rotation.
 // The credit is spent once an ML node answers with 2xx or 4xx and refunded
 // otherwise.
@@ -182,6 +192,7 @@ func (e *Engine) doWithLockedNode(
 	path observability.Path,
 	model string,
 	escrowID string,
+	route prefixRoute,
 	fn func(endpoint string) (*http.Response, error),
 ) (*http.Response, error) {
 	credit, err := e.reserveValidationCredit(ctx, path, model)
@@ -200,7 +211,7 @@ func (e *Engine) doWithLockedNode(
 			lastReason = observability.ReasonTimeout
 			return nil, observability.Classify(lastReason, observability.WhereEngineMLNodeCall, ctx.Err())
 		}
-		acq, err := e.acquireNode(ctx, model, excluded, escrowID)
+		acq, err := e.acquireNode(ctx, model, excluded, escrowID, route)
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -289,13 +300,14 @@ func (e *Engine) acquireNode(
 	model string,
 	excluded []string,
 	escrowID string,
+	route prefixRoute,
 ) (_ *mlnodegen.AcquireMLNodeResponse, err error) {
 	spanCtx, op := observability.Request.StartMLNodeAcquire(ctx, model, len(excluded))
 	defer op.FinishErr(&err)
 
 	acqCtx, cancel := context.WithTimeout(spanCtx, acquireTimeout)
 	defer cancel()
-	acq, err := e.mlClient.Acquire(acqCtx, model, excluded, escrowID)
+	acq, err := e.mlClient.Acquire(acqCtx, model, excluded, escrowID, route.sessionKey, route.hashes)
 	if err != nil {
 		return nil, err
 	}
