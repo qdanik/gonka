@@ -45,7 +45,7 @@ func fillNonZero(value reflect.Value, seed *int) {
 		fillNonZero(element, seed)
 		value.SetMapIndex(key, element)
 	case reflect.Struct:
-		if value.Type() == reflect.TypeOf(time.Time{}) {
+		if value.Type() == reflect.TypeFor[time.Time]() {
 			value.Set(reflect.ValueOf(time.Unix(int64(1700000000+*seed), 123456789).UTC()))
 			return
 		}
