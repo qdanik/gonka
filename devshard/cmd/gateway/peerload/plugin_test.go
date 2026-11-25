@@ -1,0 +1,523 @@
+package peerload
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"devshard/cmd/gateway/chain"
+)
+
+type deadlineRegistry struct {
+	*fakeRegistry
+	mu    sync.Mutex
+	reads []time.Duration
+}
+
+func (r *deadlineRegistry) MembersOf(ctx context.Context, addresses []string) ([]chain.RegistryMember, error) {
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		deadline = time.Now().Add(time.Hour)
+	}
+	r.mu.Lock()
+	r.reads = append(r.reads, time.Until(deadline))
+	r.mu.Unlock()
+	return r.fakeRegistry.MembersOf(ctx, addresses)
+}
+
+type refusingRegistrar struct {
+	mu      sync.Mutex
+	refusal error
+	writes  int
+}
+
+func (r *refusingRegistrar) RegisterInstance(context.Context, chain.RegistryRegistration) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.writes++
+	return r.refusal
+}
+
+func (r *refusingRegistrar) setRefusal(refusal error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refusal = refusal
+}
+
+func (r *refusingRegistrar) writeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.writes
+}
+
+// Test flow:
+//  1. Run one registry refresh that writes this instance's entry.
+//  2. Assert every read carried a deadline of its own, no longer than the read timeout.
+//  3. Assert the write carried one longer than the commit poll.
+func TestRegistryCallsCarryADeadline(t *testing.T) {
+	registry := &deadlineRegistry{fakeRegistry: newFakeRegistry()}
+	var writeBudget time.Duration
+	registrar := registrarFunc(func(ctx context.Context, _ chain.RegistryRegistration) error {
+		if deadline, bounded := ctx.Deadline(); bounded {
+			writeBudget = time.Until(deadline)
+		}
+		return nil
+	})
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	plugin.ObserveChain([]string{firstAddress}, testHeight)
+
+	plugin.refreshRegistry(context.Background())
+
+	if len(registry.reads) == 0 || slices.Max(registry.reads) > registryReadTimeout {
+		t.Fatalf("read budgets = %v, want each at most %v", registry.reads, registryReadTimeout)
+	}
+	if writeBudget <= chain.DefaultPollTimeout {
+		t.Fatalf("write budget = %v, want more than the %v commit poll", writeBudget, chain.DefaultPollTimeout)
+	}
+}
+
+// Test flow:
+//  1. Build a plugin from each endpoint the contract's validate_endpoint accepts, then from each it refuses.
+//  2. Assert the first build and the others are refused as bad settings.
+func TestAdvertiseURLFollowsTheContractGrammar(t *testing.T) {
+	registry := newFakeRegistry()
+	build := func(advertise string) error {
+		_, err := New(Settings{Self: PeerID{Address: firstAddress, Instance: "self"}, AdvertiseURL: advertise, ChainKey: newChainKey(t)}, Deps{Registry: registry, Registrar: registry.registrar(firstAddress), Now: newFakeClock().now})
+		return err
+	}
+	longestHost := strings.Repeat("a", endpointLimit-len("https://:8443"))
+	for _, advertise := range []string{selfEndpoint, "https://[::1]:8443", "https://127.0.0.1:1", "https://GW-1.example:65535", "https://gw.example:00443", "https://" + longestHost + ":8443"} {
+		if err := build(advertise); err != nil {
+			t.Errorf("New(%q) = %v, the contract accepts it", advertise, err)
+		}
+	}
+	for _, advertise := range []string{"https://gw.example", "https://gw.example:8443/", "https://gw.example:8443/peer", "https://u:p@gw.example:8443", "https://gw.example:8443?x=1", "https://:8443", "https://gw_x.example:8443", "https://gw.example:0", "http://gw.example:8443", "HTTPS://gw.example:8443", "https://gw.example:65536", "https://gw.example:+443", "https://gw.example:", "https://[]:8443", "https://[::1:8443", "https://[zz]:8443", "https://" + longestHost + "a:8443"} {
+		if err := build(advertise); !errors.Is(err, ErrBadSettings) {
+			t.Errorf("New(%q) = %v, want ErrBadSettings", advertise, err)
+		}
+	}
+}
+
+// Test flow:
+//  1. Have the registrar refuse and refresh again right away; assert one write.
+//  2. Move the clock through each wait, doubling from the refresh interval up to the cap; assert no write just before it ends and one write when it ends.
+//  3. Let a write succeed, then refuse again; assert the write came at once and the wait is back to the refresh interval.
+func TestRefusedWriteBacksOffUpToTheCapAndResetsOnSuccess(t *testing.T) {
+	clock := newFakeClock()
+	registrar := &refusingRegistrar{refusal: errors.New("not a writer")}
+	plugin := newTestPlugin(t, newFakeRegistry(), registrar, clock.now)
+	plugin.ObserveChain([]string{firstAddress}, testHeight)
+	ctx := context.Background()
+
+	plugin.refreshRegistry(ctx)
+	plugin.refreshRegistry(ctx)
+	if got := registrar.writeCount(); got != 1 {
+		t.Fatalf("writes = %d after two refreshes, want 1", got)
+	}
+
+	want := 1
+	for _, wait := range []time.Duration{300 * time.Second, 600 * time.Second, 1200 * time.Second, 2400 * time.Second, 4800 * time.Second, 9600 * time.Second, 19200 * time.Second, reregisterInterval, reregisterInterval} {
+		clock.advance(wait - time.Second)
+		plugin.refreshRegistry(ctx)
+		if got := registrar.writeCount(); got != want {
+			t.Fatalf("writes = %d one second before the %v wait ends, want %d", got, wait, want)
+		}
+		clock.advance(time.Second)
+		plugin.refreshRegistry(ctx)
+		want++
+		if got := registrar.writeCount(); got != want {
+			t.Fatalf("writes = %d when the %v wait ended, want %d", got, wait, want)
+		}
+	}
+
+	registrar.setRefusal(nil)
+	clock.advance(reregisterInterval)
+	plugin.refreshRegistry(ctx)
+	registrar.setRefusal(errors.New("not a writer"))
+	plugin.refreshRegistry(ctx)
+	if got := registrar.writeCount(); got != want+2 {
+		t.Fatalf("writes = %d, want %d: a success clears the wait", got, want+2)
+	}
+	clock.advance(registryRefreshInterval)
+	plugin.refreshRegistry(ctx)
+	if got := registrar.writeCount(); got != want+3 {
+		t.Fatalf("writes = %d, want %d: the wait restarts from the refresh interval", got, want+3)
+	}
+}
+
+// Test flow:
+//  1. Start the registry loop with the registry failing.
+//  2. Assert each retry waits twice as long as the one before, from the short interval up to the refresh interval, and stays there.
+//  3. Let the registry answer; assert the next read lands when the wait ends and the one after waits for the refresh interval.
+func TestFirstRegistryReadBacksOffToTheRefreshInterval(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		registry := newFakeRegistry()
+		registry.setFailure(errors.New("node down"))
+		plugin := newTestPlugin(t, registry, registry.registrar(secondAddress), time.Now)
+		plugin.ObserveChain([]string{secondAddress}, testHeight)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go plugin.registryLoop(ctx)
+		synctest.Wait()
+
+		for _, wait := range []time.Duration{firstReadRetryInterval, 2 * firstReadRetryInterval, 4 * firstReadRetryInterval, 8 * firstReadRetryInterval, 16 * firstReadRetryInterval, registryRefreshInterval, registryRefreshInterval} {
+			before := registry.callCount()
+			time.Sleep(wait - time.Second)
+			synctest.Wait()
+			if got := registry.callCount(); got != before {
+				t.Fatalf("reads = %d, want %d one second before the %v wait ends", got, before, wait)
+			}
+			time.Sleep(time.Second)
+			synctest.Wait()
+			if registry.callCount() == before {
+				t.Fatalf("no retry when the %v wait ended", wait)
+			}
+		}
+
+		registry.setFailure(nil)
+		time.Sleep(registryRefreshInterval)
+		synctest.Wait()
+		answered := registry.callCount()
+		time.Sleep(registryRefreshInterval - time.Second)
+		synctest.Wait()
+		if got := registry.callCount(); got != answered {
+			t.Fatalf("reads = %d, want %d until the refresh interval ends", got, answered)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if got := registry.callCount(); got == answered {
+			t.Fatal("no read when the refresh interval ended")
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// Test flow:
+//  1. Start the registry loop with an empty allowlist and a registry that fails, and let it run past the refresh interval.
+//  2. Change the allowlist, so a read happens and fails.
+//  3. Assert the retry comes after the first retry interval, since no earlier attempt read anything.
+func TestEmptyAllowlistDoesNotLengthenTheFirstReadRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		registry := newFakeRegistry()
+		registry.setFailure(errors.New("node down"))
+		plugin := newTestPlugin(t, registry, registry.registrar(secondAddress), time.Now)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go plugin.registryLoop(ctx)
+		time.Sleep(registryRefreshInterval + firstReadRetryInterval)
+		synctest.Wait()
+
+		plugin.ObserveChain([]string{secondAddress}, testHeight)
+		synctest.Wait()
+		failed := registry.callCount()
+		time.Sleep(firstReadRetryInterval)
+		synctest.Wait()
+
+		if registry.callCount() == failed {
+			t.Fatalf("no retry %v after the failed read", firstReadRetryInterval)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// Test flow:
+//  1. Start the registry loop with an empty allowlist.
+//  2. Change the allowlist without moving the clock.
+//  3. Assert the loop read the registry at once.
+func TestAllowlistChangeWakesTheRegistryLoopAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		registry := newFakeRegistry()
+		plugin := newTestPlugin(t, registry, registry.registrar(secondAddress), time.Now)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go plugin.registryLoop(ctx)
+		synctest.Wait()
+
+		plugin.ObserveChain([]string{secondAddress}, testHeight)
+		synctest.Wait()
+
+		if registry.callCount() == 0 {
+			t.Fatal("the allowlist change did not wake the loop")
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// Test flow:
+//  1. Hold an entry of this instance whose key matches and whose endpoint differs, written longer ago than the contract's update interval.
+//  2. Refresh.
+//  3. Assert the entry is rewritten with the advertised endpoint.
+func TestAnnounceRewritesAnEntryWithAnotherEndpoint(t *testing.T) {
+	registry := newFakeRegistry()
+	plugin := newTestPlugin(t, registry, registry.registrar(firstAddress), newFakeClock().now)
+	registry.put(firstAddress, registryEntry("self", plugin.identity, "https://moved.example:8443"))
+	plugin.ObserveChain([]string{firstAddress}, testHeight+minUpdateIntervalBlocks)
+
+	plugin.refreshRegistry(context.Background())
+
+	if got := registry.registrationCount(); got != 1 {
+		t.Fatalf("registrations = %d, want 1", got)
+	}
+	if got := registry.registered[0].Endpoint; got != selfEndpoint {
+		t.Fatalf("registered endpoint = %q, want %q", got, selfEndpoint)
+	}
+}
+
+// Test flow:
+//  1. Refresh once with no entry on chain, so the instance registers.
+//  2. Assert its own entry is already readable, without waiting for the next refresh.
+func TestAnnounceRereadsItsOwnEntryAtOnce(t *testing.T) {
+	registry := newFakeRegistry()
+	plugin := newTestPlugin(t, registry, registry.registrar(firstAddress), newFakeClock().now)
+	plugin.ObserveChain([]string{firstAddress}, testHeight)
+
+	plugin.refreshRegistry(context.Background())
+
+	if _, found := plugin.members.Lookup(plugin.settings.Self); !found {
+		t.Fatal("own entry unknown right after registering")
+	}
+}
+
+// Test flow:
+//  1. Allowlist this instance and an address whose read always fails.
+//  2. Refresh.
+//  3. Assert the instance still registers itself.
+func TestOneBadAllowlistEntryDoesNotStopRegistration(t *testing.T) {
+	registry := newFakeRegistry()
+	plugin := newTestPlugin(t, poisonedRegistry{registry}, registry.registrar(firstAddress), newFakeClock().now)
+	plugin.ObserveChain([]string{firstAddress, poisonedAddress}, testHeight)
+
+	plugin.refreshRegistry(context.Background())
+
+	if got := registry.registrationCount(); got != 1 {
+		t.Fatalf("registrations = %d, want 1", got)
+	}
+}
+
+type gatedRegistrar struct {
+	*callGate
+	inner Registrar
+}
+
+func (r *gatedRegistrar) RegisterInstance(ctx context.Context, registration chain.RegistryRegistration) error {
+	r.hold()
+	return r.inner.RegisterInstance(ctx, registration)
+}
+
+// Test flow:
+//  1. Connect a peer and refresh once so this instance has registered.
+//  2. Drop the peer from the allowlist, make this instance's entry stale and hold its next write open.
+//  3. Run a refresh and assert the peer's connection is closed while the write is still open.
+func TestRemovedPeerIsClosedBeforeAnOpenRegistryWriteFinishes(t *testing.T) {
+	registry := newFakeRegistry()
+	registrar := &gatedRegistrar{callGate: newCallGate(), inner: registry.registrar(firstAddress)}
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	peerID := PeerID{Address: secondAddress, Instance: "other"}
+	peer := newIdentity(t, peerID)
+	registry.put(secondAddress, registryEntry("other", peer, "https://other.example:8443"))
+	plugin.ObserveChain([]string{firstAddress, secondAddress}, testHeight)
+	plugin.refreshRegistry(context.Background())
+	connection, raw := connectOverPipe(t, plugin.server, peer)
+	plugin.server.trackConn(connection, http.StateActive)
+	plugin.ObserveChain([]string{firstAddress}, testHeight+reannounceBlocks)
+	registrar.armed = true
+	var finished sync.WaitGroup
+	finished.Go(func() { plugin.refreshRegistry(context.Background()) })
+	defer finished.Wait()
+	defer close(registrar.release)
+
+	<-registrar.reached
+
+	if !raw.closed.Load() {
+		t.Fatal("the removed peer's connection is still open while the registry write is open")
+	}
+}
+
+// Test flow:
+//  1. Read a peer's entry and connect it, with this instance not yet registered.
+//  2. Refresh, with a write that removes the peer from the chain as it lands, so only the reread after the write sees the removal.
+//  3. Assert the peer's connection is closed when the refresh returns.
+func TestRemovalSeenByTheRereadAfterTheWriteClosesTheConnection(t *testing.T) {
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		registry.remove(secondAddress)
+		return landing.RegisterInstance(ctx, registration)
+	})
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	peerID := PeerID{Address: secondAddress, Instance: "other"}
+	peer := newIdentity(t, peerID)
+	registry.put(secondAddress, registryEntry("other", peer, "https://other.example:8443"))
+	plugin.ObserveChain([]string{firstAddress, secondAddress}, testHeight)
+	refreshed(t, plugin.members)
+	connection, raw := connectOverPipe(t, plugin.server, peer)
+	plugin.server.trackConn(connection, http.StateActive)
+
+	plugin.refreshRegistry(context.Background())
+
+	if !raw.closed.Load() {
+		t.Fatal("the connection of a peer the reread after the write found gone is still open")
+	}
+}
+
+// Test flow:
+//  1. Read two peers' entries and connect one of them, with this instance not yet registered.
+//  2. Refresh, with a write that removes the connected peer from the chain and makes the other peer's address fail as it lands, so only a partial reread after the write sees the removal.
+//  3. Assert the removed peer's connection is closed when the refresh returns.
+func TestRemovalSeenByAPartialRereadAfterTheWriteClosesTheConnection(t *testing.T) {
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		registry.remove(secondAddress)
+		registry.failAddress(thirdAddress, errors.New("node down"))
+		return landing.RegisterInstance(ctx, registration)
+	})
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	peerID := PeerID{Address: secondAddress, Instance: "other"}
+	peer := newIdentity(t, peerID)
+	registry.put(secondAddress, registryEntry("other", peer, "https://other.example:8443"))
+	plugin.ObserveChain([]string{firstAddress, secondAddress, thirdAddress}, testHeight)
+	refreshed(t, plugin.members)
+	connection, raw := connectOverPipe(t, plugin.server, peer)
+	plugin.server.trackConn(connection, http.StateActive)
+
+	plugin.refreshRegistry(context.Background())
+
+	if !raw.closed.Load() {
+		t.Fatal("the connection of a peer the partial reread after the write found gone is still open")
+	}
+}
+
+// Test flow:
+//  1. Let a write fail after it landed on chain, so a wait starts.
+//  2. Refresh, which finds the entry current and clears the wait.
+//  3. Let the entry age until it needs a write again and refuse that write.
+//  4. Assert the wait after that refusal is the first one, the refresh interval.
+func TestWaitClearsWhenAnUnconfirmedWriteLaterLands(t *testing.T) {
+	clock := newFakeClock()
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	writes := 0
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		writes++
+		if writes == 1 {
+			_ = landing.RegisterInstance(ctx, registration)
+		}
+		return errors.New("confirmation timed out")
+	})
+	plugin := newTestPlugin(t, registry, registrar, clock.now)
+	plugin.ObserveChain([]string{firstAddress}, testHeight)
+	ctx := context.Background()
+	plugin.refreshRegistry(ctx)
+	clock.advance(time.Second)
+	plugin.refreshRegistry(ctx)
+	plugin.ObserveChain([]string{firstAddress}, testHeight+reannounceBlocks)
+	clock.advance(registryRefreshInterval)
+
+	plugin.refreshRegistry(ctx)
+	clock.advance(registryRefreshInterval)
+	plugin.refreshRegistry(ctx)
+
+	if writes != 3 {
+		t.Fatalf("writes = %d, want 3: the second refusal waits the refresh interval, not twice it", writes)
+	}
+}
+
+// Test flow:
+//  1. Hold this instance's entry with another endpoint, written a block ago, and a registrar that refuses as the contract does until the interval has passed.
+//  2. Refresh at each refresh interval, with the blocks that pass in it, until well past the interval.
+//  3. Assert no write was refused and the new endpoint was written.
+func TestAnEntryWrittenRecentlyIsNotRewrittenInsideTheUpdateInterval(t *testing.T) {
+	const blocksPerRefresh = 56
+	clock := newFakeClock()
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	height := testHeight + 1
+	refused := 0
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		if height < testHeight+minUpdateIntervalBlocks {
+			refused++
+			return errors.New("instance updated too recently")
+		}
+		return landing.RegisterInstance(ctx, registration)
+	})
+	plugin := newTestPlugin(t, registry, registrar, clock.now)
+	registry.put(firstAddress, registryEntry("self", plugin.identity, "https://moved.example:8443"))
+
+	for ; height < testHeight+3*minUpdateIntervalBlocks; height += blocksPerRefresh {
+		plugin.ObserveChain([]string{firstAddress}, height)
+		plugin.refreshRegistry(context.Background())
+		clock.advance(registryRefreshInterval)
+	}
+
+	if refused != 0 {
+		t.Fatalf("refused writes = %d, want 0", refused)
+	}
+	if got := registry.registrationCount(); got != 1 {
+		t.Fatalf("registrations = %d, want 1", got)
+	}
+}
+
+// Test flow:
+//  1. Hold this instance's entry with another endpoint, and observe a height at the given distance from its updated height.
+//  2. Refresh.
+//  3. Assert a write goes out only when the distance has reached the update interval.
+func TestADifferingEntryIsWrittenOnlyOnceItsAgeReachesTheUpdateInterval(t *testing.T) {
+	cases := []struct {
+		name       string
+		blocksAged int64
+		wantWrites int
+	}{
+		{name: "half the interval", blocksAged: 50, wantWrites: 0},
+		{name: "height moved back", blocksAged: -50, wantWrites: 0},
+		{name: "one block short", blocksAged: 99, wantWrites: 0},
+		{name: "exactly the interval", blocksAged: 100, wantWrites: 1},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry := newFakeRegistry()
+			plugin := newTestPlugin(t, registry, registry.registrar(firstAddress), newFakeClock().now)
+			registry.put(firstAddress, registryEntry("self", plugin.identity, "https://moved.example:8443"))
+			plugin.ObserveChain([]string{firstAddress}, testHeight+testCase.blocksAged)
+
+			plugin.refreshRegistry(context.Background())
+
+			if got := registry.registrationCount(); got != testCase.wantWrites {
+				t.Fatalf("registrations = %d, want %d", got, testCase.wantWrites)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Let the write succeed and every registry read after it fail.
+//  2. Refresh.
+//  3. Assert the report names the failed read, not the registration.
+func TestFailedRereadAfterAWriteIsReportedAsARead(t *testing.T) {
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		err := landing.RegisterInstance(ctx, registration)
+		registry.setFailure(errors.New("node down"))
+		return err
+	})
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	var reports []string
+	plugin.deps.Report = func(message string, _ error) { reports = append(reports, message) }
+	plugin.ObserveChain([]string{firstAddress}, testHeight)
+
+	plugin.refreshRegistry(context.Background())
+
+	if !slices.Equal(reports, []string{"peer registry read failed"}) {
+		t.Fatalf("reports = %q, want only the failed read", reports)
+	}
+}

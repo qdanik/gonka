@@ -88,6 +88,12 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `DEVSHARD_OTEL_ENABLED` | false | whether OpenTelemetry traces are exported; off is a no-op tracer ([observability.md](./observability.md), "Tracing") |
 | `OTEL_ENDPOINT` / `OTEL_HEADERS` | unset | the OTLP gRPC collector and its headers as `key=value,key=value`; a malformed header is skipped with a warning |
 | `DEVSHARD_LOG_FORMAT` | json | one JSON object per line, which promtail and the Loki panels read; any other value is the text form |
+| `GATEWAY_PEER_ENABLED` | off | switches on the channel between gateways, with the contract below; off, nothing listens or dials ([`peerload.md`](peerload.md)) |
+| `GATEWAY_PEER_REGISTRY_CONTRACT` | empty, channel off | the bech32 address of the gateway-registry contract; [its README](https://github.com/qdanik/gateway-registry) covers deploying it with an admin and upgrading it |
+| `GATEWAY_PEER_INSTANCE_ID` | empty, required when on | this instance's name under its address, `[a-z0-9-]+`, at most 32 bytes, unique per address |
+| `GATEWAY_PEER_LISTEN` | `:8443` | the mTLS listener's bind address, separate from the client API |
+| `GATEWAY_PEER_ADVERTISE_URL` | empty, required when on | the `https://host:port` other instances dial, written to the registry; at most 256 bytes, no path, no userinfo, and a host of letters, digits, `.` and `-` or a bracketed IPv6, else the boot is refused |
+| `GATEWAY_PEER_IDENTITY_KEY_ENV` | empty, required when on | the name of the variable holding the allowlisted chain key that signs `RegisterInstance` and from which the instance's transport key is derived |
 
 ## The rest of the variables
 
@@ -110,8 +116,9 @@ These are read the same way and rarely need changing. Where a knob has a longer 
 | `DEVSHARD_MAX_CONCURRENT_RUNTIME_BUILDS` | 16 | escrow sessions opened at once while the boot publishes the active escrows ([operations.md](./operations.md), "Boot") |
 | `DEVSHARD_MAX_CONCURRENT_PROMPT_COUNTS` | half of `GOMAXPROCS`, at least 1 | prompts tokenized at once, after the cache lookup and at the context check; a request that finds every slot taken after the cache lookup is not held but carries the byte estimate instead, while the context check waits for a slot ([`request.md`](request.md), "The prompt token count") |
 | `DEVSHARD_STATS_TOKENIZER` | off | whether every request that admission lets through and the cache does not answer is counted with the model's tokenizer after the cache lookup, through the gate above, with each pre-token's merge capped at 512 bytes; off, only a prompt the context check tokenizes carries a tokenizer count and every other request the byte estimate ([`request.md`](request.md), "The prompt token count") |
-| `DEVSHARD_TX_FEE_DENOM` / `DEVSHARD_TX_FEE_AMOUNT` | `ngonka` / 1 000 000 | the fee every chain transaction of the gateway carries; a fee in `ngonka` is added to what an escrow create must find in the wallet |
+| `DEVSHARD_TX_FEE_DENOM` / `DEVSHARD_TX_FEE_AMOUNT` | `ngonka` / 1 000 000 | the fee every chain transaction of the gateway carries; the registry write uses this denom, but its amount and gas limit have their own settings below; a fee in `ngonka` is added to what an escrow create must find in the wallet |
 | `DEVSHARD_TX_GAS_LIMIT` | 700 000 | the gas limit of those transactions |
+| `GATEWAY_REGISTRY_TX_FEE_AMOUNT` / `GATEWAY_REGISTRY_TX_GAS_LIMIT` | 250 000 / 250 000 | the fee, in `DEVSHARD_TX_FEE_DENOM`, and the gas limit of the registry write, each at least 1: a value below that, 0 included, is refused at load; when the chain's `wasm` fee group is enabled, the fee must be at least the gas limit times that group's minimum price ([`peerload.md`](peerload.md), "Membership") |
 | `DEVSHARD_TX_POLL_INTERVAL_MS` / `DEVSHARD_TX_POLL_TIMEOUT_MS` | 2 000 / 45 000 | how often a broadcast transaction is looked up, and how long before the gateway stops waiting for it |
 | `DEVSHARD_TX_CALL_TIMEOUT_MS` | 10 000 | the deadline of each chain call behind escrow creates, settlements and the escrow tick's lookups, so a node that never answers fails the call instead of holding the tick; at most `DEVSHARD_TX_POLL_TIMEOUT_MS` ([`chain/README.md`](../chain/README.md), "Transaction encoding") |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS_PER_10000_WEIGHT` | 5 | the requests a host's weight buys it, and with them the fleet's own ceiling ([`capacity.md`](capacity.md)) |

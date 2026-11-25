@@ -2,6 +2,7 @@ package perf
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -274,15 +275,44 @@ func TestTrackerAcquireReleaseTracksInflight(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 	tracker.RecordSample(Sample{ParticipantKey: "participant-a", Model: "model-a", Responsive: true})
 
-	tracker.Acquire("participant-a")
-	tracker.Acquire("participant-a")
+	tracker.Acquire("participant-a", "model-a")
+	tracker.Acquire("participant-a", "model-a")
 	if got := tracker.Snapshot()[0].Inflight; got != 2 {
 		t.Fatalf("in flight after 2 acquires = %d, want 2", got)
 	}
 
-	tracker.Release("participant-a")
+	tracker.Release("participant-a", "model-a")
 	if got := tracker.Snapshot()[0].Inflight; got != 1 {
 		t.Fatalf("in flight after 1 release = %d, want 1", got)
+	}
+}
+
+// Test flow:
+//  1. Build a tracker that holds no sample and acquire participant-a on model-a twice and on model-b once.
+//  2. Assert InflightPairs reports two requests on model-a and one on model-b.
+//  3. Release model-a once and model-b once and assert one request on model-a is left and model-b has no pair.
+func TestTrackerInflightPairsCountsEachModelSeparately(t *testing.T) {
+	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
+
+	tracker.Acquire("participant-a", "model-a")
+	tracker.Acquire("participant-a", "model-a")
+	tracker.Acquire("participant-a", "model-b")
+	got := map[string]int{}
+	for _, pair := range tracker.InflightPairs() {
+		got[pair.Participant+"/"+pair.Model] = pair.Requests
+	}
+	if want := map[string]int{"participant-a/model-a": 2, "participant-a/model-b": 1}; !maps.Equal(got, want) {
+		t.Fatalf("pairs in flight = %v, want %v", got, want)
+	}
+
+	tracker.Release("participant-a", "model-a")
+	tracker.Release("participant-a", "model-b")
+	got = map[string]int{}
+	for _, pair := range tracker.InflightPairs() {
+		got[pair.Participant+"/"+pair.Model] = pair.Requests
+	}
+	if want := map[string]int{"participant-a/model-a": 1}; !maps.Equal(got, want) {
+		t.Fatalf("pairs in flight after releases = %v, want %v", got, want)
 	}
 }
 
@@ -385,9 +415,9 @@ func TestTrackerConcurrentRecordAndQueryNoRace(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			tracker.Acquire(participant)
+			tracker.Acquire(participant, "model-a")
 			tracker.Snapshot()
-			tracker.Release(participant)
+			tracker.Release(participant, "model-a")
 		}()
 	}
 	wg.Wait()

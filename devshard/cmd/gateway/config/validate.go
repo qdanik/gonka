@@ -139,6 +139,13 @@ func (c *Config) validateChain(complain func(format string, args ...any)) {
 	if c.Tx.GasLimit < 1 {
 		complain("tx_gas_limit: %d must be >= 1", c.Tx.GasLimit)
 	}
+	// The tx client reads a fee of 0 as unset and pays its default, so 0 is refused here.
+	if c.Tx.RegistryFeeAmount < 1 {
+		complain("registry_tx_fee_amount: %d must be >= 1", c.Tx.RegistryFeeAmount)
+	}
+	if c.Tx.RegistryGasLimit < 1 {
+		complain("registry_tx_gas_limit: %d must be >= 1", c.Tx.RegistryGasLimit)
+	}
 	if c.Tx.PollIntervalMS < 1 {
 		complain("tx_poll_interval_ms: %d must be >= 1", c.Tx.PollIntervalMS)
 	}

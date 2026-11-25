@@ -9,6 +9,7 @@ The binary is [`../main.go`](../main.go): it copies the version the build stamps
 | File | What it is for |
 | --- | --- |
 | `compose.go` | wires every package into one process |
+| `peers.go` | builds the peer channel and hands it this gateway's own load |
 | `routing.go` | builds the registry, the scheduler and the warmup together, because each needs the others |
 | `capacity.go` | reads the chain snapshot into the numbers the limiters price by |
 | `lifecycle.go` | starts and stops everything |
@@ -57,7 +58,7 @@ The per-weight *allowance* is the exception: it follows the raw chain phase rath
 
 ## Shutdown
 
-Thirteen steps, in a fixed order, described in [`docs/operations.md`](../docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
+Fourteen steps, in a fixed order, described in [`docs/operations.md`](../docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
 
 Four positions in that order are load-bearing:
 
