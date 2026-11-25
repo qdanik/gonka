@@ -161,6 +161,7 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"tx_fee_amount negative", func(c *Config) { c.Tx.FeeAmount = -1 }, "tx_fee_amount"},
 		{"tx_gas_limit too low", func(c *Config) { c.Tx.GasLimit = 0 }, "tx_gas_limit"},
 		{"registry_tx_fee_amount negative", func(c *Config) { c.Tx.RegistryFeeAmount = -1 }, "registry_tx_fee_amount"},
+		{"registry_tx_fee_amount zero", func(c *Config) { c.Tx.RegistryFeeAmount = 0 }, "registry_tx_fee_amount"},
 		{"registry_tx_gas_limit too low", func(c *Config) { c.Tx.RegistryGasLimit = 0 }, "registry_tx_gas_limit"},
 		{"tx_poll_interval_ms too low", func(c *Config) { c.Tx.PollIntervalMS = 0 }, "tx_poll_interval_ms"},
 		{"tx_poll_timeout_ms below interval", func(c *Config) { c.Tx.PollTimeoutMS = 100 }, "tx_poll_timeout_ms"},

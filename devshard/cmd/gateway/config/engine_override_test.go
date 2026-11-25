@@ -72,6 +72,17 @@ func TestEngineTimingsReachTheSnapshotFromTheEnvironment(t *testing.T) {
 }
 
 // Test flow:
+//  1. Build a config with the registry fee set to 0 via environment values.
+//  2. Assert the build is refused naming `registry_tx_fee_amount`, so the registry write never pays a fee the operator did not set.
+func TestRegistryTxFeeOfZeroIsRefused(t *testing.T) {
+	t.Parallel()
+	_, err := Build(env.Values{RegistryTxFeeAmount: int64Pointer(0)}, Overrides{})
+	if err == nil || !strings.Contains(err.Error(), "registry_tx_fee_amount: 0 must be >= 1") {
+		t.Fatalf("Build() = %v, want a refusal naming registry_tx_fee_amount: 0 must be >= 1", err)
+	}
+}
+
+// Test flow:
 //  1. Build a config with the registry fee and gas limit set via environment values.
 //  2. Assert both reach the registry fields and the shared fee and gas limit keep their defaults.
 func TestRegistryTxSettingsReachTheConfigFromTheEnvironment(t *testing.T) {
