@@ -92,7 +92,7 @@ func New(settings Settings, deps Deps) (*Plugin, error) {
 		verifier: verifier,
 		view:     view,
 		topic:    topic,
-		server:   newServer(settings.Self, verifier, identity, []peerTopic{topic}, deps.Now),
+		server:   newServer(settings.Self, verifier, identity, []peerTopic{topic}, deps.Now, deps.Report),
 		poller:   newPoller(members, verifier, identity, view, deps.Dial, deps.Now, deps.Report),
 		nudge:    make(chan struct{}, 1),
 	}, nil

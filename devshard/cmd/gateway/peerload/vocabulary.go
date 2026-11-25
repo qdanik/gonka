@@ -76,6 +76,11 @@ const (
 	maxConnections           = maxConnectedAddresses * maxInstancesPerAddress
 	maxUnidentifiedPerSource = 8
 
+	listenerLogInterval = 10 * time.Second
+	listenerLogBurst    = 3
+	noLogPrefix         = ""
+	noLogFlags          = 0
+
 	transportKeyLabel = "gonka/gateway/peer-transport/v1"
 	chainKeyBytes     = 32
 

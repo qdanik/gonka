@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -37,6 +38,12 @@ type topicAllowance struct {
 	topic string
 }
 
+type listenerLog struct {
+	allowance *rate.Limiter
+	now       func() time.Time
+	report    func(string, error)
+}
+
 type payloadCache struct {
 	topic peerTopic
 
@@ -46,7 +53,7 @@ type payloadCache struct {
 	payload []byte
 }
 
-func newServer(self PeerID, verifier *verifier, identity transportIdentity, topics []peerTopic, now func() time.Time) *peerServer {
+func newServer(self PeerID, verifier *verifier, identity transportIdentity, topics []peerTopic, now func() time.Time, report func(string, error)) *peerServer {
 	payloads := make(map[string]*payloadCache, len(topics))
 	for _, topic := range topics {
 		payloads[topic.Name()] = &payloadCache{topic: topic}
@@ -74,6 +81,7 @@ func newServer(self PeerID, verifier *verifier, identity transportIdentity, topi
 		MaxHeaderBytes:    maxHeaderBytes,
 		Protocols:         protocols,
 		ConnState:         server.trackConn,
+		ErrorLog:          log.New(listenerLog{allowance: rate.NewLimiter(rate.Every(listenerLogInterval), listenerLogBurst), now: now, report: report}, noLogPrefix, noLogFlags),
 	}
 	return server
 }
@@ -269,6 +277,13 @@ func (s *peerServer) nextSeq(now time.Time) uint64 {
 	defer s.mu.Unlock()
 	s.lastSeq = max(uint64(now.UnixNano()), s.lastSeq+1)
 	return s.lastSeq
+}
+
+func (l listenerLog) Write(line []byte) (int, error) {
+	if l.allowance.AllowN(l.now(), 1) {
+		l.report("peer listener log", errors.New(strings.TrimSpace(string(line))))
+	}
+	return len(line), nil
 }
 
 func (c *payloadCache) read(now time.Time) ([]byte, time.Time, error) {

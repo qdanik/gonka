@@ -285,6 +285,12 @@ func (l *failureLog) report(_ string, err error) {
 	l.messages = append(l.messages, err)
 }
 
+func (l *failureLog) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.messages)
+}
+
 func (l *failureLog) contains(target error) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()

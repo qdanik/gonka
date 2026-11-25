@@ -6,9 +6,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -46,7 +48,7 @@ func newCountingServer(t *testing.T) (*peerServer, *verifierFixture, countingTop
 		builds:    &atomic.Int64{},
 		failure:   &atomic.Pointer[error]{},
 	}
-	return newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{topic}, fixture.clock.now), fixture, topic
+	return newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{topic}, fixture.clock.now, func(string, error) {}), fixture, topic
 }
 
 func requestLoad(server *peerServer, identity transportIdentity) *httptest.ResponseRecorder {
@@ -487,7 +489,7 @@ func TestHandlerOfAPeerThatNeverReadsIsReleasedByTheWriteTimeout(t *testing.T) {
 	const bound = 10 * time.Second
 	fixture := newVerifierFixture(t)
 	load := newLoadTopic(func() []LoadSample { return nil }, DefaultRounding(), nil)
-	server := newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{bulkyTopic{load}}, fixture.clock.now)
+	server := newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{bulkyTopic{load}}, fixture.clock.now, func(string, error) {})
 	if server.http.WriteTimeout != serverWriteTimeout {
 		t.Fatalf("WriteTimeout = %v, want %v", server.http.WriteTimeout, serverWriteTimeout)
 	}
@@ -548,5 +550,88 @@ func TestHandlerOfAPeerThatNeverReadsIsReleasedByTheWriteTimeout(t *testing.T) {
 	case <-released:
 	case <-time.After(bound):
 		t.Fatalf("the handler of a client that never reads was not released within %v", bound)
+	}
+}
+
+type processLog struct {
+	mu      sync.Mutex
+	written bytes.Buffer
+}
+
+func (l *processLog) Write(line []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.Write(line)
+}
+
+func (l *processLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.String()
+}
+
+func failHandshake(t *testing.T, address string) {
+	t.Helper()
+	const bound = 5 * time.Second
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(t.Context(), "tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write(make([]byte, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(bound)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(conn); errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the listener did not close a connection that failed its handshake within %v", bound)
+	}
+}
+
+// Test flow:
+//  1. Serve on a loopback listener with the process log captured, a recording reporter and the clock standing still.
+//  2. Fail more handshakes than the listener's log allowance holds, each from a source that sends no TLS, and wait for the listener to close each.
+//  3. Assert the process log stays empty and the reporter holds exactly the allowance's burst of lines.
+//  4. Advance the clock one allowance interval, fail one more handshake and assert exactly one more line reaches the reporter.
+func TestFailedHandshakesReachTheReporterInsideAnAllowanceAndNeverTheProcessLog(t *testing.T) {
+	captured := &processLog{}
+	previous := log.Writer()
+	log.SetOutput(captured)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	fixture := newVerifierFixture(t)
+	reported := &failureLog{}
+	load := newLoadTopic(func() []LoadSample { return nil }, DefaultRounding(), nil)
+	server := newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{load}, fixture.clock.now, reported.report)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = server.Close()
+		if err := <-served; err != nil {
+			t.Errorf("Serve() = %v, want nil", err)
+		}
+	})
+
+	for range listenerLogBurst + 5 {
+		failHandshake(t, listener.Addr().String())
+	}
+	if written := captured.String(); written != "" {
+		t.Fatalf("process log = %q, want nothing written by a failed handshake", written)
+	}
+	if got := reported.count(); got != listenerLogBurst {
+		t.Fatalf("reported lines = %d, want the allowance's burst of %d", got, listenerLogBurst)
+	}
+
+	fixture.clock.advance(listenerLogInterval)
+	failHandshake(t, listener.Addr().String())
+	failHandshake(t, listener.Addr().String())
+	if got := reported.count(); got != listenerLogBurst+1 {
+		t.Fatalf("reported lines after one interval = %d, want %d", got, listenerLogBurst+1)
 	}
 }

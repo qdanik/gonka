@@ -248,7 +248,7 @@ func newServerFixture(t *testing.T) (*peerServer, *verifierFixture) {
 	t.Helper()
 	fixture := newVerifierFixture(t)
 	load := newLoadTopic(func() []LoadSample { return nil }, DefaultRounding(), nil)
-	server := newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{load, oversizedTopic{load}}, fixture.clock.now)
+	server := newServer(fixture.members.self.ID, fixture.verifier, fixture.selfID, []peerTopic{load, oversizedTopic{load}}, fixture.clock.now, func(string, error) {})
 	return server, fixture
 }
 
