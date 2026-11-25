@@ -208,6 +208,31 @@ func TestPeerCannotAddModelSeriesBeyondTheLocalModels(t *testing.T) {
 }
 
 // Test flow:
+//  1. Resolve a config whose network prices 5 requests per 10000 weight and whose model-a prices 20.
+//  2. Give one host a weight of 10000 on model-a and on a model without settings of its own.
+//  3. Assert the channel's concurrency is 20 for model-a and 5 for the other model.
+func TestPeerConcurrencyFollowsTheModelsOwnPrice(t *testing.T) {
+	const networkModel = "model-b"
+	ownPrice := 20.0
+	configuration := config.Defaults()
+	configuration.Limits.Concurrency.RequestsPer10000Weight = 5
+	if err := configuration.ResolveModels(map[string]config.ModelSettings{peerTestModel: {MaxConcurrentRequestsPer10000Weight: &ownPrice}}); err != nil {
+		t.Fatalf("ResolveModels() = %v", err)
+	}
+	weights := map[string]map[string]float64{peerTestModel: {peerTestHost: 10000}, networkModel: {peerTestHost: 10000}}
+	capacity := limits.NewCapacity(nil)
+	capacity.Update(chain.PhaseSnapshot{CurrentWeightsByModel: weights, FullWeightsByModel: weights})
+	sources := peerChannelSources{capacity: capacity, configHolder: config.NewHolder(&configuration)}
+
+	if got := peerConcurrency(sources, peerTestHost, peerTestModel); got != 20 {
+		t.Errorf("peerConcurrency(%s) = %d, want the model's own 20", peerTestModel, got)
+	}
+	if got := peerConcurrency(sources, peerTestHost, networkModel); got != 5 {
+		t.Errorf("peerConcurrency(%s) = %d, want the network's 5", networkModel, got)
+	}
+}
+
+// Test flow:
 //  1. Track one host on two models and put one request in flight on the second model.
 //  2. Join the samples the channel publishes.
 //  3. Assert the request appears on its own model's row only.

@@ -112,7 +112,7 @@ func peerConcurrency(sources peerChannelSources, participant, model string) int6
 	if !sources.capacity.ModelKnown(model) {
 		return unknownConcurrency
 	}
-	return limits.EarnedConcurrency(sources.configHolder.Load().Limits.Concurrency.RequestsPer10000Weight, sources.capacity.ParticipantWeight(participant, model))
+	return limits.EarnedConcurrency(sources.configHolder.Load().For(model).Limits.Concurrency.RequestsPer10000Weight, sources.capacity.ParticipantWeight(participant, model))
 }
 
 func localLoadSamples(sources peerChannelSources) []peerload.LoadSample {
