@@ -245,10 +245,10 @@ func failedWithoutAnswer(key CounterKey) bool {
 func outsidePoC(key CounterKey) bool { return key.Phase != PhasePoC }
 
 func servedNoUser(key CounterKey) bool {
-	return key.Terminal == TerminalWarmupProbe || key.Terminal == TerminalShadowProbe
+	return key.Terminal == TerminalWarmupProbe || key.Terminal == TerminalShadowProbe || key.Terminal == TerminalBusyProbe
 }
 
-// A warmup or shadow probe is the gateway's own request, so it leaves every rate whatever it ended as.
+// A warmup, shadow or busy probe is the gateway's own request, so it leaves every rate whatever it ended as.
 func offRecord(key CounterKey) bool { return excused(key) || servedNoUser(key) }
 
 // A failure the host did not cause. Slowness that drove the client away is measured by its own findings.

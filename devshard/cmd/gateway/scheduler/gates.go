@@ -100,7 +100,6 @@ func (s *Scheduler) maxBurnsPerRequest(model string) int64 {
 	return s.settings.Load().For(model).Scheduler.MaxBurnsPerRequest
 }
 
-// hostLoadMode is read once per pick and once per drain, so an admin change reaches an escrow already running.
 func (s *Scheduler) hostLoadMode(model string) string {
 	return s.settingsInForce().For(model).Scheduler.HostLoadMode
 }

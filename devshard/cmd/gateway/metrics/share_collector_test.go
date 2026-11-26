@@ -1,6 +1,10 @@
 package metrics
 
-import "testing"
+import (
+	"testing"
+
+	"devshard/cmd/gateway/config"
+)
 
 // Test flow:
 //  1. Register a `ShareCollector` over one model with two hosts, one of which the ledger does not hold.
@@ -13,7 +17,7 @@ func TestTheShareCollectorReportsTargetsPassesAndMode(t *testing.T) {
 		Row: func(participant, model string) (ShareRow, bool) {
 			return ShareRow{Participant: participant, Model: model, Target: 0.4, Offered: 0.6, Answered: 5, Missed: 4, Owed: 3, Unvoted: 2}, participant == "host-a"
 		},
-		Mode: func(string) float64 { return 2 },
+		Mode: func(string) string { return config.HostLoadModeBalance },
 	}))
 
 	expectGauge(t, telemetry, "devshard_gateway_host_load_mode", labels{"model": "model-a"}, 2)

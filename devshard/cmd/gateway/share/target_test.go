@@ -80,7 +80,7 @@ func TestBalanceReadsFullServeRatioBelowTheMinimumVolume(t *testing.T) {
 func TestBalanceConvergesWithoutOscillation(t *testing.T) {
 	const total = 800.0
 	offered := map[string]float64{"slow": 400, "fast": 400}
-	var history []float64
+	history := make([]float64, 0, 40)
 	for range 40 {
 		hosts := map[string]Input{}
 		for name, weight := range map[string]float64{"slow": 1, "fast": 1} {

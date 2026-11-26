@@ -39,6 +39,9 @@ type dispatcherDeps struct {
 	observer            dispatchObserver
 	shadow              ShadowProber
 	shares              *share.Ledger
+	passer              PassSender
+	passes              *passBook
+	hostLoadMode        func() string
 	now                 func() time.Time
 	matchWait           func() time.Duration
 	maxConsecutiveBurns func() int64

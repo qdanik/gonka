@@ -1712,3 +1712,20 @@ func TestRequestRoomIsTheFreeWindowOverItsStep(t *testing.T) {
 		t.Errorf("room of a cut-off host = %v, want 0", room)
 	}
 }
+
+// Test flow:
+//  1. Price a model at 2 concurrent requests per 10,000 weight and observe a host of weight 30,000, a host of weight 1 and a host with no weight.
+//  2. Assert the earned concurrency is 6, at least 1 for the light host, and 1 for the host without weight.
+func TestEarnedConcurrencyIsWhatTheWeightBuysAtLeastOne(t *testing.T) {
+	cfg := testConfig()
+	cfg.Pricing.ConcurrencyPer10000Weight = 2
+	cfg.Pricing.ContextTokensByModel = map[string]int64{"model": 4}
+	limiter := newTestLimiter(cfg, newMovingClock(testEpoch).now)
+	limiter.ObserveWeights(map[string]map[string]float64{"model": {"heavy": 30_000, "light": 1}})
+
+	for participant, want := range map[string]int{"heavy": 6, "light": 1, "unknown": 1} {
+		if got := limiter.EarnedConcurrency(participant, "model"); got != want {
+			t.Errorf("EarnedConcurrency(%s) = %d, want %d", participant, got, want)
+		}
+	}
+}

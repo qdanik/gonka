@@ -1,6 +1,6 @@
 # Gateway v6: host load mode (off, weight, balance)
 
-Status: concept, no code. Base: branch `devshard/gateway/v6.0.0` at `f2369877`. Every file and line below was read at that commit. A statement marked (inferred) follows from the code plus the numbers but was not observed directly.
+Status: implemented in `devshard/cmd/gateway` (setting, share ledger, rank, pass rule); the load-harness scenario of section 9 is pending. Base: branch `devshard/gateway/v6.0.0` at `f2369877`. Every file and line below was read at that commit. A statement marked (inferred) follows from the code plus the numbers but was not observed directly.
 
 ## 1. The problem
 
@@ -106,8 +106,8 @@ An admin write publishes a new snapshot through `Holder.Swap` ([`config/holder.g
 
 Per host and model, as decayed counts with the model's `perf_ewma_halflife_seconds` (600 s, [`config/defaults.go:101-110`](../../devshard/cmd/gateway/config/defaults.go#L101-L110)) and as epoch totals for reporting. Both are reset where host state is reset at the epoch boundary ([`app/epoch_reset.go:39-48`](../../devshard/cmd/gateway/app/epoch_reset.go#L39-L48)).
 
-- `assigned`: every nonce bound to one of the host's slots, service nonces included.
-- `offered`: nonces the drain bound to the host while a request was waiting. It is the sum of the next four plus the sends still in flight.
+- `assigned`: every nonce the drain bound to one of the host's slots; warm-up and vote nonces are not drained and are not counted.
+- `offered`: nonces the drain bound to the host while a request was waiting, abandoned and failed-prepare nonces excepted. It is the sum of the next four plus the sends still in flight.
 - `served`: sent and finished inside the request's deadlines.
 - `failed`: sent and ended in a refusal, a timeout or a transport fault. An attempt the gateway cancelled itself is counted in neither.
 - `passed`: not sent because the window was full, the cut-off was open, the host was ejected or its chat budget was spent.
@@ -133,8 +133,8 @@ Burns stay, in every mode, for blocks that are not the gateway's judgement of lo
 
 - Probes in flight per host: at most the host's weight-earned concurrency (29 for A). Above it a pass is an owed vote with no send.
 - Vote rounds: the existing pacer, 10 rounds a second with a burst of 20 ([`warmup/pace.go:10-42`](../../devshard/cmd/gateway/warmup/pace.go#L10-L42)). The pacer starts a round at once when it would wait more than two minutes, so it is not a hard bound by itself.
-- Hard bound, at the pick: an escrow carries at most 100 unresolved passes (probes in flight plus votes not yet posted), half of the 200-nonce margin the pick keeps under the nonce cap ([`scheduler/escrow_pick.go:17`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L17), [`scheduler/escrow_pick.go:397-426`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L397-L426)), so that the vote of every unresolved pass still fits under the cap. At the bound, a walk that needs another pass on that escrow is forecast unusable; the request takes another escrow, or is answered overloaded with no nonce spent when none is left. The starting value is to be confirmed by the harness run of section 9.
-- Residue: a pass still unresolved when its escrow settles settles as a ghost does today. The ledger counts it as `pass_unvoted` per host. The gateway never chooses this outcome; it is bounded by 100 per escrow and it is reported.
+- Hard bound, at the pick: an escrow carries at most 100 unresolved passes (probes in flight plus votes not yet posted), half of the 200-nonce margin the pick keeps under the nonce cap ([`scheduler/escrow_pick.go:17`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L17), [`scheduler/escrow_pick.go:397-426`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L397-L426)), so that the vote of every unresolved pass still fits under the cap. At the bound, a walk that needs another pass on that escrow is forecast unusable; the request takes another escrow, or is answered overloaded with no nonce spent when none is left. A drain that meets the bound answers its waiters busy, with no nonce spent, and their requests take another escrow. The starting value is to be confirmed by the harness run of section 9.
+- Residue: a pass whose vote cannot be posted (no poster for the escrow, a failed vote round, or the gateway ending) settles as a ghost does today. The ledger counts it as `pass_unvoted` per host. The gateway never chooses this outcome; it is bounded by 100 per escrow and it is reported.
 
 ## 5. The modes
 
@@ -146,7 +146,7 @@ Nothing changes. The rank is `(expected burns, load)`, a busy host's nonce is a 
 
 Target: `target(h) = weight_share(h)`.
 
-Selection. For each host `surplus(h) = clamp(offered(h) - target(h) x total offered, -window(h), +window(h))`, in nonces over the decayed counts, where `window(h)` is the number of requests the host's two windows admit now (`min(input tokens / input step, output tokens / output step)`, the fields of [`limits/report.go:42-67`](../../devshard/cmd/gateway/limits/report.go#L42-L67)). The walk of the forecast ([`scheduler/escrow_pick.go:351-390`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L351-L390)) already visits every slot up to the serving one; it sums the surplus of the hosts it crosses, passes and the serving host alike, shadow slots excluded. `pickRank` becomes `(passes, walk surplus, load)` ([`scheduler/escrow_pick.go:147-154`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L147-L154)). Fewest passes first keeps the payer's cost per request lowest; among equal walks the request takes the one that touches the hosts furthest below their target, so an escrow heavy in a host above its target advances less. Money tiers, reserves, the pinned escrow of a hedge and every other rule of the pick are unchanged. Under `off` the walk surplus is 0 for every escrow and the order is today's.
+Selection. For each host `surplus(h) = clamp(offered(h) - target(h) x total offered, -window(h), +window(h))`, in nonces over the decayed counts, where `window(h)` is the number of requests the host's two windows admit now (`min(free input tokens / input step, free output tokens / output step)`, free being the window less what is in flight, `ParticipantLimiter.RequestRoom`; 0 while cut off, unbounded for a host with no window). The walk of the forecast ([`scheduler/escrow_pick.go:351-390`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L351-L390)) already visits every slot up to the serving one; it sums the surplus of the hosts it crosses, passes and the serving host alike, shadow slots excluded. `pickRank` becomes `(burns, walk surplus, load)`, where the burns of a walk include its passes ([`scheduler/escrow_pick.go:147-154`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L147-L154)). Fewest burns and passes first keeps the payer's cost per request lowest; among equal walks the request takes the one that touches the hosts furthest below their target, so an escrow heavy in a host above its target advances less. Money tiers, reserves, the pinned escrow of a hedge and every other rule of the pick are unchanged. Under `off` the walk surplus is 0 for every escrow and the order is today's.
 
 Unserved nonce: 4.3. The target does not move when a host passes or fails, so a host that cannot carry its share keeps being offered it and keeps answering probes or taking misses for the part it does not carry.
 
@@ -164,7 +164,7 @@ How the window enters. The window is what turns an offer into `served` or `passe
 
 Fixed point. A host with entitlement `c` nonces and capacity `K` below it is offered `x` with `x = c x K / x`, so `x = sqrt(c x K)`: the geometric mean of what its weight entitles it to and what it serves. It is offered less than its weight share and more than it serves, and the difference is the probing that lets the factor recover. The slope of the feedback at the fixed point is -1 and the factor is a 600 s average, so (inferred) the loop settles without a standing oscillation; the harness asserts it.
 
-Cadence. Counters move on every bind and every outcome. Shares, factors and targets are recomputed once a second per model and when the chain snapshot or the model's set of accepting escrows changes, and are published as one table that a pick reads whole. Everything resets at the epoch boundary.
+Cadence. Counters move on every bind and every outcome. Shares, factors and targets are recomputed once a second per model and when the epoch, the mode or the number of the model's accepting escrows changes, and are published as one table that a pick reads whole. Everything resets at the epoch boundary.
 
 Bounds. The factor is in [0.25, 1], so a host is always offered enough to recover. After normalisation a target is between 0.25 and 4 times the weight share. The surplus is clamped to one window, so a host returning from a cut-off catches up by at most one window. The share is only the second key of the rank, so it never buys an extra pass.
 

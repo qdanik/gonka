@@ -25,3 +25,19 @@ func TestABurnedNonceCanReachItsRefusalDeadline(t *testing.T) {
 	require.GreaterOrEqual(t, waited-params.StartedAt, int64(types.DefaultRefusalTimeoutSeconds),
 		"a verifier must be able to accept the timeout once the refusal window has passed")
 }
+
+// Test flow:
+//  1. Read the placeholder params for a pass with a given second, and the stream's own ghost params at a later clock.
+//  2. Assert the pass params carry the given second and the same prompt and token budget as a ghost's.
+func TestAPlaceholderIsDatedAsTheScheduleCommittedIt(t *testing.T) {
+	committedAt := int64(1_700_000_000)
+	stream := nonceStream{model: "test-model", now: func() time.Time { return time.Unix(committedAt+90, 0) }}
+
+	pass := PlaceholderParams("test-model", committedAt)
+	ghost := stream.ghostParams()
+
+	require.Equal(t, committedAt, pass.StartedAt)
+	require.Equal(t, committedAt+90, ghost.StartedAt)
+	pass.StartedAt = ghost.StartedAt
+	require.Equal(t, ghost, pass)
+}

@@ -19,8 +19,7 @@ type ShareSources struct {
 	Models func() []string
 	Hosts  func(model string) []string
 	Row    func(participant, model string) (ShareRow, bool)
-	// Mode is the host_load_mode in force for the model: 0 off, 1 weight, 2 balance.
-	Mode func(model string) float64
+	Mode   func(model string) string
 }
 
 // ShareCollector reads the share ledger at scrape time.
@@ -51,7 +50,7 @@ func (c *ShareCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *ShareCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, model := range c.sources.Models() {
-		gauge(ch, c.mode, c.sources.Mode(model), model)
+		gauge(ch, c.mode, hostLoadModeGauge[c.sources.Mode(model)], model)
 		for _, participant := range c.sources.Hosts(model) {
 			row, held := c.sources.Row(participant, model)
 			if !held {
@@ -59,10 +58,10 @@ func (c *ShareCollector) Collect(ch chan<- prometheus.Metric) {
 			}
 			gauge(ch, c.target, row.Target, participant, model)
 			gauge(ch, c.offered, row.Offered, participant, model)
-			counter(ch, c.passes, float64(row.Answered), participant, model, "answered")
-			counter(ch, c.passes, float64(row.Missed), participant, model, "missed")
-			counter(ch, c.passes, float64(row.Owed), participant, model, "owed")
-			counter(ch, c.passes, float64(row.Unvoted), participant, model, "unvoted")
+			counter(ch, c.passes, float64(row.Answered), participant, model, passOutcomeAnswered)
+			counter(ch, c.passes, float64(row.Missed), participant, model, passOutcomeMissed)
+			counter(ch, c.passes, float64(row.Owed), participant, model, passOutcomeOwed)
+			counter(ch, c.passes, float64(row.Unvoted), participant, model, passOutcomeUnvoted)
 		}
 	}
 }

@@ -10,10 +10,8 @@ import (
 	"devshard/cmd/gateway/share"
 )
 
-// loadTableMaxAge is how long a model's table is kept while nothing it was built from changes. See docs/proposals/gateway-weight-proportional-load.md, "Cadence".
 const loadTableMaxAge = time.Second
 
-// loadTable is one model's targets, published whole: a pick reads it and never mutates it.
 type loadTable struct {
 	builtAt time.Time
 	epoch   uint64
@@ -23,17 +21,16 @@ type loadTable struct {
 	slots   map[string]float64
 }
 
-// loadGates gives the pick's gates the surplus of the model's table under weight and balance, and leaves them untouched under off.
 func (s *Scheduler) loadGates(gates availability, model string, candidates []Escrow, snapshot chain.PhaseSnapshot) availability {
 	mode := s.hostLoadMode(model)
-	if mode != config.HostLoadModeWeight && mode != config.HostLoadModeBalance {
+	if !config.RoutesByLoad(mode) {
 		return gates
 	}
+	gates.passes = true
 	gates.surplus = s.loadTableFor(model, mode == config.HostLoadModeBalance, candidates, snapshot).surplus
 	return gates
 }
 
-// surplus is the host's offered load above its target in nonces; a host outside the table has none.
 func (table *loadTable) surplus(participant string) float64 {
 	if table == nil {
 		return 0
@@ -93,12 +90,11 @@ func (s *Scheduler) roomOf(participant, model string) float64 {
 	return s.rooms(participant, model)
 }
 
-// loadTableFor rebuilds the model's table once a second and when its epoch, mode or set of accepting escrows changes.
 func (s *Scheduler) loadTableFor(model string, balance bool, candidates []Escrow, snapshot chain.PhaseSnapshot) *loadTable {
 	now := s.now()
 	s.loads.mu.Lock()
 	defer s.loads.mu.Unlock()
-	if table := s.loads.byModel[model]; table != nil && table.balance == balance && table.epoch == snapshot.EpochIndex &&
+	if table := s.loads.byModel[model]; table != nil && table.balance == balance && table.epoch == snapshot.EffectiveEpochIndex &&
 		table.escrows == len(candidates) && now.Sub(table.builtAt) < loadTableMaxAge {
 		return table
 	}
@@ -135,7 +131,7 @@ func (s *Scheduler) buildLoadTable(model string, balance bool, candidates []Escr
 		}
 	}
 	table := &loadTable{
-		builtAt: now, epoch: snapshot.EpochIndex, escrows: len(candidates), balance: balance,
+		builtAt: now, epoch: snapshot.EffectiveEpochIndex, escrows: len(candidates), balance: balance,
 		hosts: share.Targets(balance, inputs, settings.For(model).Perf.FailureRateMinVolume),
 		slots: make(map[string]float64, len(slotCounts)),
 	}

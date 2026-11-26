@@ -253,6 +253,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	depletion := &depletionNotice{}
 	finishes := &finishNotice{}
 	shadowProbes := shadow.New(clock, probeBounds{configuration: configHolder, snapshots: observer})
+	passProbes := shadow.NewPassRunner(clock)
 	escrows, router, prober, err := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,
@@ -272,6 +273,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Journal:      events,
 		Timeouts:     raceObserver,
 		Shadow:       shadowProbes,
+		Passes:       passProbes,
 		Now:          clock,
 	})
 	if err != nil {
@@ -331,10 +333,23 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	prober.Settle(sessions.Poster, probeTimeouts, events)
 	prompts := promptTokens(sources.ModelSnapshots, observer)
 	e2e := env.LoadE2E()
+	voter := warmup.Voter{Posters: sessions.Poster, Timeouts: probeTimeouts, Pace: warmup.NewVotePacer(clock, warmup.SleepFor)}
+	passProbes.Bind(shadow.PassBinding{
+		Escrows:  escrows,
+		Lifetime: ctx,
+		Voter:    voter,
+		Probes:   events,
+		Timeout: func(model string) time.Duration {
+			settings := configHolder.Load().For(model).Engine
+			return time.Duration(settings.ReceiptTimeoutMS+settings.FirstTokenCeilingMS) * time.Millisecond
+		},
+		Cap:     participants.EarnedConcurrency,
+		Faulted: participants.CountRefusal,
+	})
 	shadowProbes.Bind(shadow.Binding{
 		Escrows:  escrows,
 		Lifetime: ctx,
-		Voter:    warmup.Voter{Posters: sessions.Poster, Timeouts: probeTimeouts, Pace: warmup.NewVotePacer(clock, warmup.SleepFor)},
+		Voter:    voter,
 		Probes:   events,
 		Outcomes: shadowOutcomes{recorder: metrics.NewShadowProbeRecorder(telemetry), events: events},
 		HardTimeout: func() time.Duration {
@@ -515,7 +530,6 @@ func hostShares(router *scheduler.Scheduler, shares *share.Ledger) accounting.Sh
 }
 
 func shareSources(router *scheduler.Scheduler, shares *share.Ledger, models func() []string) metrics.ShareSources {
-	modeValues := map[string]float64{config.HostLoadModeOff: 0, config.HostLoadModeWeight: 1, config.HostLoadModeBalance: 2}
 	return metrics.ShareSources{
 		Models: models,
 		Hosts:  shares.Hosts,
@@ -530,7 +544,7 @@ func shareSources(router *scheduler.Scheduler, shares *share.Ledger, models func
 				Owed: row.Totals.Of(share.VotesOwed), Unvoted: row.Totals.Of(share.PassUnvoted),
 			}, true
 		},
-		Mode: func(model string) float64 { return modeValues[router.HostLoadMode(model)] },
+		Mode: router.HostLoadMode,
 	}
 }
 

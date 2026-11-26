@@ -144,7 +144,6 @@ type rankedPick struct {
 	pastBurnCap        bool
 }
 
-// pickRank orders escrows by the burns of the walk, then by the surplus of the hosts it crosses, then by load; the surplus is 0 under off.
 type pickRank struct {
 	burns   int
 	surplus float64
@@ -344,12 +343,16 @@ type burnForecast struct {
 	burns   int
 	charged int
 	usable  bool
-	// surplus sums the surplus of every non-shadow host the walk crosses, the serving one included; it is 0 under off.
 	surplus float64
+	passes  int
 }
 
 func (s *Scheduler) burnsToServe(candidate Escrow, fleet availability, queued *waiter, queuedAhead uint64, forceAfter int64) burnForecast {
-	return expectedBurns(candidate, fleet.forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate)), queued, queuedAhead, forceAfter)
+	gates := fleet.forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate))
+	if gates.passes {
+		gates.passRoom = s.passes.room(candidate.ID)
+	}
+	return expectedBurns(candidate, gates, queued, queuedAhead, forceAfter)
 }
 
 func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedAhead uint64, forceAfter int64) burnForecast {
@@ -382,6 +385,13 @@ func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedA
 		if forceAfter > forcedSendOff && int64(run) >= forceAfter && gates.servingOverFullWindows().blocks(slot, queued) == blockNone && reachable() {
 			forecast.usable = true
 			return forecast
+		}
+		if gates.passes && reason.passable() {
+			forecast.passes++
+			if forecast.passes > gates.passRoom {
+				forecast.usable = false
+				return forecast
+			}
 		}
 		if reason.burns() {
 			forecast.burns++

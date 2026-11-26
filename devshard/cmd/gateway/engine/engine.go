@@ -43,7 +43,6 @@ type hostWindows interface {
 	CountRefusal(participant, model string, launchedAt time.Time)
 }
 
-// shareCounter is satisfied by *share.Ledger.
 type shareCounter interface {
 	Count(model, participant string, kind share.Kind)
 }

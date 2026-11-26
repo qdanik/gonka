@@ -41,6 +41,7 @@ const (
 	TerminalUnreported  = "unreported"
 	TerminalWarmupProbe = "warmup_probe"
 	TerminalShadowProbe = "shadow_probe"
+	TerminalBusyProbe   = "busy_probe"
 	TerminalClientGone  = "client_gone_before_delivery"
 )
 

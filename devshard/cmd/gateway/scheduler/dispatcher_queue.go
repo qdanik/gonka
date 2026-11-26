@@ -42,6 +42,8 @@ func (d *dispatcher) drain() (time.Time, bool) {
 	escalationBound := escalationNonceBound(snapshot.MaxNonce, groupSize)
 	burnLimit := d.maxConsecutiveBurns()
 	requestBurnCap := d.maxBurnsPerRequest()
+	passing := d.passing()
+	passedAt := d.now().Unix()
 
 	var offered offer
 	decide := func(binding HostBinding) NonceIntent {
@@ -76,11 +78,18 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		default:
 			return intentFor(offered.decision)
 		}
-		if _, burning := offered.decision.(burn); burning {
+		if burning, isBurn := offered.decision.(burn); isBurn {
 			offered.chargedWaiter = d.burnedFor(binding.Participant, refusedWaiter, gates)
 			if charged := offered.chargedWaiter; charged != nil && charged.profile.Burns.Reached(requestBurnCap) {
 				offered.decision = overloaded{waiter: charged}
 				return NonceIntent{}
+			}
+			if passing && burning.kind.passable() {
+				if d.passes.room(d.escrowID) <= 0 {
+					offered.decision = passBound{}
+					return NonceIntent{}
+				}
+				offered.decision = burn{kind: burning.kind, pass: true}
 			}
 		}
 		var held bool
@@ -96,7 +105,11 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			d.giveBack(offered.taken)
 			offered.decision = decline{}
 		}
-		return intentFor(offered.decision)
+		intent := intentFor(offered.decision)
+		if burning, isBurn := offered.decision.(burn); isBurn && burning.pass {
+			intent.StartedAt = passedAt
+		}
+		return intent
 	}
 
 	for {
@@ -125,6 +138,10 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			d.failAdvance(offered.decision, offered.taken, err)
 			return time.Time{}, false
 		}
+		if _, bounded := offered.decision.(passBound); bounded {
+			d.failWaiting(ErrHostsBusy)
+			return time.Time{}, false
+		}
 
 		switch outcome := offered.decision.(type) {
 		case serve:
@@ -139,6 +156,18 @@ func (d *dispatcher) drain() (time.Time, bool) {
 				d.burnsInARow = 0
 			}
 		case burn:
+			if outcome.pass {
+				chargeBurn(offered.chargedWaiter)
+				d.sendPass(outcome, offered.taken, prepared, passedAt)
+				if !avail.shadowMember(offered.taken.participant) {
+					d.countBurn(offered.taken.participant, outcome.kind)
+				}
+				d.burnsInARow++
+				if d.spendBurnBudget(&burnBudget) {
+					return time.Time{}, false
+				}
+				continue
+			}
 			burned := Burn{
 				Participant: offered.taken.participant, Reason: outcome.kind.reason(),
 				RequestID: requestIDOf(offered.chargedWaiter),
@@ -214,9 +243,8 @@ func (d *dispatcher) spendBurnBudget(budget *int) (tripped bool) {
 	return true
 }
 
-// countBurn books a burn in the share ledger: a load block is passed, a block that is not the host's load is excused, and a nonce no request was waiting for is only assigned.
 func (d *dispatcher) countBurn(participant string, kind GhostKind) {
-	if counted, ok := kind.shareKind(); ok {
+	if counted, ok := shareKindFor[kind]; ok {
 		d.count(participant, share.Assigned, share.Offered, counted)
 		return
 	}

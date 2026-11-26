@@ -102,3 +102,16 @@ func (l *ParticipantLimiter) RequestRoom(participant, model string) float64 {
 	output := float64(max(state.output.tokens-float64(state.output.inflight), 0)) / float64(state.bounds.Output.Step)
 	return math.Floor(math.Min(input, output))
 }
+
+const minimumEarnedConcurrency = 1
+
+// EarnedConcurrency is how many requests at full price the host's weight buys it, and at least one.
+func (l *ParticipantLimiter) EarnedConcurrency(participant, model string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	input := l.windowsForLocked(participant, model).Input
+	if input.Step <= 0 {
+		return minimumEarnedConcurrency
+	}
+	return int(min(max(input.Min/input.Step, minimumEarnedConcurrency), math.MaxInt32))
+}

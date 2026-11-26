@@ -25,6 +25,7 @@ type committedNonce struct {
 	participant string
 	ghost       bool
 	params      any
+	startedAt   int64
 }
 
 // scriptedSession binds nonce N to slot N%len(slots), the same rule the real session uses.
@@ -94,6 +95,7 @@ func (s *scriptedSession) Advance(decide func(HostBinding) NonceIntent) (Prepare
 		participant: binding.Participant,
 		ghost:       intent.Ghost,
 		params:      intent.Params,
+		startedAt:   intent.StartedAt,
 	})
 	return preparedNonce{nonce: nonce, hostIdx: hostIdx}, nil
 }
@@ -394,6 +396,10 @@ type harnessConfig struct {
 	model               string
 	settings            *config.Config
 	shares              *share.Ledger
+	passer              PassSender
+	passes              *passBook
+	hostLoadMode        string
+	budgetSpent         map[string]bool
 }
 
 func (cfg harnessConfig) modelOrDefault() string { return cmp.Or(cfg.model, modelA) }
@@ -426,6 +432,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		swallowCommit:   cfg.swallowCommit,
 		gate:            cfg.gate,
 		afterDecide:     cfg.afterDecide,
+		budgetSpent:     cfg.budgetSpent,
 	}
 	clock := newTestClock()
 	observer := &recordingObserver{}
@@ -442,13 +449,16 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	burnCap.Store(cfg.maxBurnsPerRequest)
 
 	dispatcher := newDispatcher(dispatcherDeps{
-		escrowID:   escrowA,
-		model:      cfg.modelOrDefault(),
-		shadow:     cfg.prober,
-		shares:     cfg.shares,
-		session:    session,
-		snapshots:  snapshots,
-		predicates: cfg.predicates,
+		escrowID:     escrowA,
+		model:        cfg.modelOrDefault(),
+		shadow:       cfg.prober,
+		shares:       cfg.shares,
+		passer:       cfg.passer,
+		passes:       cfg.passes,
+		hostLoadMode: func() string { return cfg.hostLoadMode },
+		session:      session,
+		snapshots:    snapshots,
+		predicates:   cfg.predicates,
 		acquireSlot: func(participant string, cost limits.TokenCost, overFullWindow bool) (func(), limits.Admission) {
 			if overFullWindow {
 				return limiter.Overdraft(participant, modelA, cost)

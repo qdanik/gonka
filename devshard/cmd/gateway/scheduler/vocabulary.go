@@ -36,3 +36,13 @@ const (
 	ExhaustionInsufficientBalance  ExhaustionReason = "insufficient_balance"
 	exhaustionFallbackNonceCeiling ExhaustionReason = "fallback_nonce_ceiling"
 )
+
+// PassOutcome is how a pass ended: PassAnswered is a probe the host answered, PassMissed a probe it did not answer and a vote settled, PassOwed a nonce no probe could be sent on and a vote settled, and PassUnvoted a pass whose vote could not be posted. See routing.md, "Host load mode".
+type PassOutcome int
+
+const (
+	PassAnswered PassOutcome = iota
+	PassMissed
+	PassOwed
+	PassUnvoted
+)

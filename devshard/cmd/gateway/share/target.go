@@ -2,17 +2,17 @@ package share
 
 import "math"
 
-const (
-	// FactorFloor keeps a host that serves little offered enough to recover.
-	FactorFloor = 0.25
-)
+// FactorFloor is the lowest capacity factor, so a host that serves little is still offered enough to recover.
+const FactorFloor = 0.25
+
+// FactorCeiling is the highest capacity factor, a host that serves all it is offered.
+const FactorCeiling = 1
 
 // Input is what one host brings to the targets of its model.
 type Input struct {
 	Weight float64
 	Counts Decayed
-	// Room is the number of requests the host's two windows admit now, +Inf when the host has no window.
-	Room float64
+	Room   float64
 }
 
 // Share is the target of one host and the figures it is derived from.
@@ -22,8 +22,7 @@ type Share struct {
 	CapacityFactor float64
 	TargetShare    float64
 	OfferedShare   float64
-	// Surplus is offered minus target times the total offered, in nonces, clamped to one window either way.
-	Surplus float64
+	Surplus        float64
 }
 
 // Targets returns one Share per host. Without balance the target is the weight share; with it the weight share is scaled by the capacity factor and normalised. minVolume is the denominator below which a host's serve ratio reads 1.
@@ -36,7 +35,7 @@ func Targets(balance bool, hosts map[string]Input, minVolume float64) map[string
 	shares := make(map[string]Share, len(hosts))
 	var scaledSum float64
 	for name, input := range hosts {
-		share := Share{CapacityFactor: 1, ServeRatio: 1}
+		share := Share{CapacityFactor: FactorCeiling, ServeRatio: FactorCeiling}
 		if weightSum > 0 {
 			share.WeightShare = input.Weight / weightSum
 		}
@@ -44,7 +43,7 @@ func Targets(balance bool, hosts map[string]Input, minVolume float64) map[string
 			share.ServeRatio = input.Counts.Served / volume
 		}
 		if balance {
-			share.CapacityFactor = math.Min(1, math.Max(FactorFloor, share.ServeRatio))
+			share.CapacityFactor = math.Min(FactorCeiling, math.Max(FactorFloor, share.ServeRatio))
 		}
 		shares[name] = share
 		scaledSum += share.WeightShare * share.CapacityFactor

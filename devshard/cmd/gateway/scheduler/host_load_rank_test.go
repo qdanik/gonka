@@ -11,7 +11,6 @@ import (
 
 const picksPerRank = 12
 
-// rankFixture is two escrows of the hosts A and B whose cursors land on B and A, with the ledger of both hosts non-zero: A holds 80 of 100 offered nonces and serves a quarter of what it is offered, B holds 20 and serves all.
 func rankFixture(t *testing.T, mode string) *Scheduler {
 	t.Helper()
 	scheduler, escrows, _ := newScheduler(

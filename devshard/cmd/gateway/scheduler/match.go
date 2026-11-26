@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"time"
+
+	"devshard/cmd/gateway/share"
 )
 
 // availability is the host predicates for one drain. Its frozen map memoises the whole ladder per participant, and a nil one leaves every read live. See routing.md, "The drain".
@@ -19,8 +21,10 @@ type availability struct {
 	frozen          map[string]blockReason
 	overFullWindows bool
 
-	// surplus is each host's offered load above its target in nonces; nil under off, where every host reads 0.
 	surplus func(participant string) float64
+
+	passes   bool
+	passRoom int
 }
 
 type blockReason int
@@ -38,6 +42,11 @@ const (
 	blockShadow
 )
 
+func (reason blockReason) passable() bool {
+	kind, burned := ghostFor[reason]
+	return burned && kind.passable()
+}
+
 func (reason blockReason) burns() bool {
 	return reason != blockNone && reason != blockShadow
 }
@@ -51,6 +60,17 @@ var ghostFor = map[blockReason]GhostKind{
 	blockUntrusted:       ghostUntrusted,
 	blockStateDiverged:   ghostStateDiverged,
 	blockAbsentFromChain: ghostAbsentFromChain,
+}
+
+var shareKindFor = map[GhostKind]share.Kind{
+	ghostWindowFull:      share.Passed,
+	ghostCutOff:          share.Passed,
+	ghostEjected:         share.Passed,
+	ghostPoC:             share.Excused,
+	ghostUntrusted:       share.Excused,
+	ghostStateDiverged:   share.Excused,
+	ghostExclude:         share.Excused,
+	ghostAbsentFromChain: share.Excused,
 }
 
 func (a availability) surplusOf(participant string) float64 {

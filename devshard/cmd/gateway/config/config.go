@@ -190,7 +190,7 @@ type Engine struct {
 	HedgeFirstTokenFloorMS       int64
 }
 
-// Scheduler groups nonce-holding tuning; HostLoadMode is one of the HostLoadMode values, see docs/proposals/gateway-weight-proportional-load.md. MatchWaitMS of 0 burns an unmatched nonce immediately, MaxConsecutiveBurns of 0 never forces a send and MaxBurnsPerRequest of 0 never caps a request. See routing.md, "The forced send" and "The burn cap of a request".
+// Scheduler groups nonce-holding tuning; HostLoadMode is one of the HostLoadMode values, see routing.md, "Host load mode". MatchWaitMS of 0 burns an unmatched nonce immediately, MaxConsecutiveBurns of 0 never forces a send and MaxBurnsPerRequest of 0 never caps a request. See routing.md, "The forced send" and "The burn cap of a request".
 type Scheduler struct {
 	MatchWaitMS         int64
 	MaxConsecutiveBurns int64
@@ -240,7 +240,7 @@ type Config struct {
 	staleModels []string
 }
 
-// PoCMode values are what Modes.PoCMode accepts, ModelAccess values what Limits.Access accepts, NoContextLength is a model whose length neither governance nor the operator names, and ProbeMinOutputTokens is the fewest output tokens a shadow probe asks for.
+// PoCMode values are what Modes.PoCMode accepts, ModelAccess values what Limits.Access accepts, HostLoadMode values what Scheduler.HostLoadMode accepts, NoContextLength is a model whose length neither governance nor the operator names, and ProbeMinOutputTokens is the fewest output tokens a shadow probe asks for.
 const (
 	NoContextLength = chain.NoMaxModelLen
 
@@ -261,6 +261,11 @@ const (
 
 	minAPIKeyLength = 16
 )
+
+// RoutesByLoad reports whether the mode spreads load over hosts by weight, which is every mode but off.
+func RoutesByLoad(mode string) bool {
+	return mode == HostLoadModeWeight || mode == HostLoadModeBalance
+}
 
 // AdminEnabled is what callers must gate on: comparing against AdminAPIKey would authenticate an empty key.
 func (s Server) AdminEnabled() bool { return s.AdminAPIKey != "" }

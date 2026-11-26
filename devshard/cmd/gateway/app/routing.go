@@ -38,6 +38,7 @@ type routingDeps struct {
 	Journal      *journal.Journal
 	Timeouts     timeoutSink
 	Shadow       *shadow.Runner
+	Passes       *shadow.PassRunner
 	Now          func() time.Time
 }
 
@@ -88,11 +89,19 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		OnReserveTaken:    escrows.ReserveTaken,
 		OnMoneyShort:      deps.Depletion.OnMoneyShort,
 		Shadow:            shadowProber(deps.Shadow),
+		PassSender:        passSender(deps.Passes),
 	})
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return escrows, router, prober, nil
+}
+
+func passSender(runner *shadow.PassRunner) scheduler.PassSender {
+	if runner == nil {
+		return nil
+	}
+	return runner
 }
 
 func shadowProber(runner *shadow.Runner) scheduler.ShadowProber {

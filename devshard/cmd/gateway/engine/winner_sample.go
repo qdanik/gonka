@@ -88,7 +88,6 @@ func (e *Engine) decideWinner(winner heldWinner, finished bool) {
 	}
 }
 
-// countShare books a recorded sample as served or failed in the share ledger; an attempt the gateway cancelled is exempt from sampling and counts in neither.
 func (e *Engine) countShare(sample perf.Sample) {
 	if e.deps.Shares == nil {
 		return

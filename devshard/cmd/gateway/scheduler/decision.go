@@ -13,7 +13,13 @@ type serve struct {
 	waiter           *waiter
 	despiteExclusion bool
 }
-type burn struct{ kind GhostKind }
+
+type burn struct {
+	kind GhostKind
+	pass bool
+}
+
+type passBound struct{}
 
 type probe struct{ params any }
 
@@ -31,6 +37,7 @@ func (probe) isDecision()      {}
 func (hold) isDecision()       {}
 func (decline) isDecision()    {}
 func (overloaded) isDecision() {}
+func (passBound) isDecision()  {}
 
 // waiter is one request queued on an escrow's dispatcher; handoff guards bound and orders deliver against abandon. See routing.md, "The per-escrow dispatcher".
 type waiter struct {

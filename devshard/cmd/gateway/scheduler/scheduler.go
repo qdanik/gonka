@@ -25,6 +25,7 @@ type Deps struct {
 	Observer          dispatchObserver
 	Shadow            ShadowProber
 	Shares            *share.Ledger
+	PassSender        PassSender
 	Weights           func(participant, model string) float64
 	Rooms             func(participant, model string) float64
 	Now               func() time.Time
@@ -44,6 +45,8 @@ type Scheduler struct {
 	observer          dispatchObserver
 	shadow            ShadowProber
 	shares            *share.Ledger
+	passer            PassSender
+	passes            passBook
 	weights           func(participant, model string) float64
 	rooms             func(participant, model string) float64
 	loads             loadTables
@@ -100,6 +103,7 @@ func NewScheduler(deps Deps) (*Scheduler, error) {
 		observer:          deps.Observer,
 		shadow:            deps.Shadow,
 		shares:            deps.Shares,
+		passer:            deps.PassSender,
 		weights:           deps.Weights,
 		rooms:             deps.Rooms,
 		now:               deps.Now,

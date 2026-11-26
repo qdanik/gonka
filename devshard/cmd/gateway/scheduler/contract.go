@@ -75,10 +75,13 @@ type Escrow struct {
 
 // NonceIntent is what the scheduler tells a session to do with the nonce it offers. See README, "The boundary types".
 type NonceIntent struct {
-	Commit bool
-	Ghost  bool
-	Params any
+	Commit    bool
+	Ghost     bool
+	Params    any
+	StartedAt int64
 }
+
+const StartedAtUnset int64 = 0
 
 // session is the narrow view of devshard/user.Session the scheduler needs; Advance is the atomic peek->decide->commit unit. See README, "The boundary types".
 type session interface {

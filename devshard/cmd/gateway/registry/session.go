@@ -303,6 +303,8 @@ func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceI
 		switch {
 		case !intent.Commit:
 			return user.InferenceParams{}, false, nil, errNonceDeclined
+		case intent.Ghost && intent.StartedAt != scheduler.StartedAtUnset:
+			return PlaceholderParams(s.model, intent.StartedAt), false, nil, nil
 		case intent.Ghost:
 			return s.ghostParams(), false, nil, nil
 		}
@@ -327,11 +329,16 @@ func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceI
 
 // StartedAt is seconds, not milliseconds, or the refusal deadline goes negative. See host/timeout.go, VerifyRefusedTimeout.
 func (s nonceStream) ghostParams() user.InferenceParams {
+	return PlaceholderParams(s.model, s.now().Unix())
+}
+
+// PlaceholderParams are the params a ghost or a pass commits its nonce with.
+func PlaceholderParams(model string, startedAt int64) user.InferenceParams {
 	return user.InferenceParams{
-		Model:       s.model,
+		Model:       model,
 		Prompt:      ghostPrompt,
 		InputLength: uint64(len(ghostPrompt)),
 		MaxTokens:   ghostMaxTokens,
-		StartedAt:   s.now().Unix(),
+		StartedAt:   startedAt,
 	}
 }
