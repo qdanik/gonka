@@ -89,7 +89,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		profile: profile, snapshot: snapshot, queued: queued, avoided: avoided,
 		retirement: retirement, request: request, attempts: s.attemptsToFund(profile.Model), limits: s.burnLimits(profile.Model),
 		reachable: reachableByTrust(s.settingsInForce().For(profile.Model).Scheduler.Participants),
-		fleet:     s.fleetGates(profile.Model, snapshot),
+		fleet:     s.loadGates(s.fleetGates(profile.Model, snapshot), profile.Model, candidates, snapshot),
 		ahead:     s.queuedAhead(candidates),
 	}
 	regular := s.rankCandidates(candidates, ranking, false)
@@ -144,13 +144,15 @@ type rankedPick struct {
 	pastBurnCap        bool
 }
 
+// pickRank orders escrows by the burns of the walk, then by the surplus of the hosts it crosses, then by load; the surplus is 0 under off.
 type pickRank struct {
-	burns int
-	load  float64
+	burns   int
+	surplus float64
+	load    float64
 }
 
 func (rank pickRank) compare(other pickRank) int {
-	return cmp.Or(cmp.Compare(rank.burns, other.burns), cmp.Compare(rank.load, other.load))
+	return cmp.Or(cmp.Compare(rank.burns, other.burns), cmp.Compare(rank.surplus, other.surplus), cmp.Compare(rank.load, other.load))
 }
 
 type scoreTier struct {
@@ -159,7 +161,7 @@ type scoreTier struct {
 }
 
 func newScoreTier() scoreTier {
-	return scoreTier{best: pickRank{burns: math.MaxInt, load: math.Inf(1)}}
+	return scoreTier{best: pickRank{burns: math.MaxInt, surplus: math.Inf(1), load: math.Inf(1)}}
 }
 
 func (tier *scoreTier) offer(index int, rank pickRank) {
@@ -214,7 +216,7 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 			result.pastBurnCap = true
 			continue
 		}
-		rank := pickRank{burns: forecast.burns, load: (float64(candidate.ActiveUsers) + float64(ranking.ahead[index])) / weight}
+		rank := pickRank{burns: forecast.burns, surplus: forecast.surplus, load: (float64(candidate.ActiveUsers) + float64(ranking.ahead[index])) / weight}
 		if !forecast.usable {
 			rank.burns = unusableBurns
 		}
@@ -342,6 +344,8 @@ type burnForecast struct {
 	burns   int
 	charged int
 	usable  bool
+	// surplus sums the surplus of every non-shadow host the walk crosses, the serving one included; it is 0 under off.
+	surplus float64
 }
 
 func (s *Scheduler) burnsToServe(candidate Escrow, fleet availability, queued *waiter, queuedAhead uint64, forceAfter int64) burnForecast {
@@ -369,6 +373,7 @@ func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedA
 			run++
 			continue
 		}
+		forecast.surplus += gates.surplusOf(slot)
 		reason := gates.blocks(slot, queued)
 		if reason == blockNone {
 			forecast.usable = true

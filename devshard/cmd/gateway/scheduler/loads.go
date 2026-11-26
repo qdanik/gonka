@@ -23,6 +23,16 @@ type loadTable struct {
 	slots   map[string]float64
 }
 
+// loadGates gives the pick's gates the surplus of the model's table under weight and balance, and leaves them untouched under off.
+func (s *Scheduler) loadGates(gates availability, model string, candidates []Escrow, snapshot chain.PhaseSnapshot) availability {
+	mode := s.hostLoadMode(model)
+	if mode != config.HostLoadModeWeight && mode != config.HostLoadModeBalance {
+		return gates
+	}
+	gates.surplus = s.loadTableFor(model, mode == config.HostLoadModeBalance, candidates, snapshot).surplus
+	return gates
+}
+
 // surplus is the host's offered load above its target in nonces; a host outside the table has none.
 func (table *loadTable) surplus(participant string) float64 {
 	if table == nil {

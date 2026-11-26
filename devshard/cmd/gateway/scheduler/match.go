@@ -18,6 +18,9 @@ type availability struct {
 
 	frozen          map[string]blockReason
 	overFullWindows bool
+
+	// surplus is each host's offered load above its target in nonces; nil under off, where every host reads 0.
+	surplus func(participant string) float64
 }
 
 type blockReason int
@@ -48,6 +51,13 @@ var ghostFor = map[blockReason]GhostKind{
 	blockUntrusted:       ghostUntrusted,
 	blockStateDiverged:   ghostStateDiverged,
 	blockAbsentFromChain: ghostAbsentFromChain,
+}
+
+func (a availability) surplusOf(participant string) float64 {
+	if a.surplus == nil {
+		return 0
+	}
+	return a.surplus(participant)
 }
 
 // A missing predicate reads as no block, so an availability built without one does not narrow dispatch.
