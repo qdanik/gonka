@@ -13,6 +13,7 @@ import (
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
+	"devshard/cmd/gateway/share"
 )
 
 // Errors the engine returns. See README.md, "Errors the engine returns".
@@ -40,6 +41,11 @@ type hostTracker interface {
 type hostWindows interface {
 	OnResult(result limits.Result)
 	CountRefusal(participant, model string, launchedAt time.Time)
+}
+
+// shareCounter is satisfied by *share.Ledger.
+type shareCounter interface {
+	Count(model, participant string, kind share.Kind)
 }
 
 type raceMetrics interface {
@@ -70,6 +76,7 @@ type Deps struct {
 	Targets   escrowTargets
 	Windows   hostWindows
 	Perf      hostTracker
+	Shares    shareCounter
 	Snapshots snapshotSource
 	Config    *config.Holder
 	Metrics   raceMetrics

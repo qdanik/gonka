@@ -1688,3 +1688,27 @@ func TestEarnedConcurrencySaturatesAWeightPastTheInt64Range(t *testing.T) {
 		t.Fatalf("earnedConcurrency() = %d, want %d", earned, int64(math.MaxInt64))
 	}
 }
+
+// Test flow:
+//  1. Ask for the room of a host the limiter does not track, then of a tracked host with windows of four tokens and a step of one.
+//  2. Take two requests in flight and ask again, then open the cut-off.
+//  3. Assert the untracked host has no limit, the tracked one has the lower free window over its step, and a cut-off host has none to spare.
+func TestRequestRoomIsTheFreeWindowOverItsStep(t *testing.T) {
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(testConfig(), clock.now)
+
+	if room := limiter.RequestRoom("host", "model"); !math.IsInf(room, 1) {
+		t.Fatalf("room of an untracked host = %v, want +Inf", room)
+	}
+	limiter.acquired(t, "host", "model")
+	limiter.acquired(t, "host", "model")
+	if room := limiter.RequestRoom("host", "model"); room != 2 {
+		t.Errorf("room with 2 of 4 in flight = %v, want 2", room)
+	}
+	for range testConfig().AfterFailures {
+		limiter.answered("host", "model", TransportFault)
+	}
+	if room := limiter.RequestRoom("host", "model"); room != 0 {
+		t.Errorf("room of a cut-off host = %v, want 0", room)
+	}
+}

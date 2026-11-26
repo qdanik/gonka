@@ -112,6 +112,7 @@ type ParticipantRecord struct {
 	LatestNonces []EscrowNonce   `json:"latest_nonces"`
 	CrossChecks  CrossChecks     `json:"cross_checks"`
 	Capability   *HostCapability `json:"capability,omitempty"`
+	Share        *HostShare      `json:"share,omitempty"`
 
 	Counters []CounterRecord `json:"counters"`
 	Slots    []SlotRecord    `json:"slots"`

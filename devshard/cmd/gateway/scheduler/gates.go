@@ -100,6 +100,11 @@ func (s *Scheduler) maxBurnsPerRequest(model string) int64 {
 	return s.settings.Load().For(model).Scheduler.MaxBurnsPerRequest
 }
 
+// hostLoadMode is read once per pick and once per drain, so an admin change reaches an escrow already running.
+func (s *Scheduler) hostLoadMode(model string) string {
+	return s.settingsInForce().For(model).Scheduler.HostLoadMode
+}
+
 // requestReserve prices this one request the way the chain will charge it. See capacity.md, "The balance floor".
 func requestReserve(profile RequestProfile) uint64 {
 	return uint64(max(profile.InputBytes, 0)) + uint64(max(profile.OutputTokens, 0))

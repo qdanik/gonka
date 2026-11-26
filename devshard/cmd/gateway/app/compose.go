@@ -34,6 +34,7 @@ import (
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/shadow"
+	"devshard/cmd/gateway/share"
 	"devshard/cmd/gateway/store"
 	"devshard/cmd/gateway/warmup"
 	"devshard/logging"
@@ -239,6 +240,9 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	})
 	hosts := perf.NewTracker(configHolder, clock)
 	hosts.SetNarrator(events)
+	shares := share.New(clock, func(model string) time.Duration {
+		return time.Duration(configHolder.Load().For(model).Perf.EWMAHalfLifeSeconds) * time.Second
+	})
 	recorder.SetCapability(hostCapabilities(hosts, participants, capacity))
 
 	raceRecorder := metrics.NewRaceRecorder(telemetry, clock, func() time.Duration {
@@ -255,6 +259,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Capacity:     capacity,
 		Participants: participants,
 		Hosts:        hosts,
+		Shares:       shares,
 		Snapshots:    observer,
 		Config:       configHolder,
 		Depletion:    depletion,
@@ -341,6 +346,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Targets:    sessions,
 		Windows:    participants,
 		Perf:       hosts,
+		Shares:     shares,
 		Snapshots:  observer,
 		Config:     configHolder,
 		Metrics:    raceObserver,
@@ -357,7 +363,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, err
 	}
 	finishes.attach(races)
-	subscribeEpochBoundaryReset(observer, participants, hosts, races, events)
+	subscribeEpochBoundaryReset(observer, participants, hosts, shares, races, events)
+	recorder.SetShare(hostShares(router, shares))
 	// One wrapper for both readers, so the gauge reports the scale admission actually applies.
 	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder, participants: participants}
 	telemetry.Register(
@@ -376,6 +383,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			Available:          participants.Available,
 			DrainCloseFailures: escrows.DrainCloseFailures,
 		}),
+		metrics.NewShareCollector(shareSources(router, shares, escrows.Models)),
 		metrics.NewChainCollector(observer, clock),
 		metrics.NewTransportCollector(transport.DefaultHostConnectionTracker()),
 		metrics.NewAccountingCollector(ledger),
@@ -484,6 +492,45 @@ func hostCapabilities(hosts *perf.Tracker, participants *limits.ParticipantLimit
 			capability.WindowWeight = uint64(max(capacity.ParticipantWeight(participant, model), 0))
 		}
 		return capability
+	}
+}
+
+func hostShares(router *scheduler.Scheduler, shares *share.Ledger) accounting.ShareFunc {
+	return func(participant, model string) (accounting.HostShare, bool) {
+		row, held := router.HostShare(participant, model)
+		if !held {
+			return accounting.HostShare{}, false
+		}
+		totals := row.Totals
+		return accounting.HostShare{
+			HostLoadMode: row.HostLoadMode, Weight: row.Weight, WeightShare: row.WeightShare, SlotShare: row.SlotShare,
+			TargetShare: row.TargetShare, OfferedShare: row.OfferedShare, Surplus: row.Surplus,
+			ServeRatio: row.ServeRatio, CapacityFactor: row.CapacityFactor,
+			Assigned: totals.Of(share.Assigned), Offered: totals.Of(share.Offered), Served: totals.Of(share.Served),
+			Failed: totals.Of(share.Failed), Passed: totals.Of(share.Passed), Excused: totals.Of(share.Excused),
+			ProbesAnswered: totals.Of(share.ProbesAnswered), ProbesMissed: totals.Of(share.ProbesMissed),
+			VotesOwed: totals.Of(share.VotesOwed), PassUnvoted: totals.Of(share.PassUnvoted),
+		}, true
+	}
+}
+
+func shareSources(router *scheduler.Scheduler, shares *share.Ledger, models func() []string) metrics.ShareSources {
+	modeValues := map[string]float64{config.HostLoadModeOff: 0, config.HostLoadModeWeight: 1, config.HostLoadModeBalance: 2}
+	return metrics.ShareSources{
+		Models: models,
+		Hosts:  shares.Hosts,
+		Row: func(participant, model string) (metrics.ShareRow, bool) {
+			row, held := router.HostShare(participant, model)
+			if !held {
+				return metrics.ShareRow{}, false
+			}
+			return metrics.ShareRow{
+				Participant: participant, Model: model, Target: row.TargetShare, Offered: row.OfferedShare,
+				Answered: row.Totals.Of(share.ProbesAnswered), Missed: row.Totals.Of(share.ProbesMissed),
+				Owed: row.Totals.Of(share.VotesOwed), Unvoted: row.Totals.Of(share.PassUnvoted),
+			}, true
+		},
+		Mode: func(model string) float64 { return modeValues[router.HostLoadMode(model)] },
 	}
 }
 

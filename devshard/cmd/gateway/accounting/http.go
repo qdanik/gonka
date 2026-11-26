@@ -15,10 +15,11 @@ type Handler struct {
 	book         *Book
 	currentEpoch CurrentEpochFunc
 	capability   CapabilityFunc
+	share        ShareFunc
 }
 
-func NewHandler(book *Book, currentEpoch CurrentEpochFunc, capability CapabilityFunc) http.Handler {
-	handler := &Handler{book: book, currentEpoch: currentEpoch, capability: capability}
+func NewHandler(book *Book, currentEpoch CurrentEpochFunc, capability CapabilityFunc, share ShareFunc) http.Handler {
+	handler := &Handler{book: book, currentEpoch: currentEpoch, capability: capability, share: share}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/escrows", handler.serveEscrows)
 	mux.HandleFunc("GET /api/v1/epochs", handler.serveEpochs)
@@ -62,6 +63,7 @@ func (h *Handler) serveParticipants(w http.ResponseWriter, r *http.Request) {
 	}
 	records := h.book.Query(filterOf(r, epoch))
 	attachCapabilities(records, h.capability)
+	attachShares(records, h.share)
 	writeParticipants(w, epoch, records)
 }
 
@@ -106,6 +108,7 @@ func (h *Handler) serveParticipant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attachCapabilities(records, h.capability)
+	attachShares(records, h.share)
 	writeJSON(w, http.StatusOK, struct {
 		SchemaVersion int                 `json:"schema_version"`
 		EpochIndex    uint64              `json:"epoch_index"`

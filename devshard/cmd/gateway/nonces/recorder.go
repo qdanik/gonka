@@ -55,6 +55,7 @@ type Recorder struct {
 	epochs   EpochSource
 
 	capability    atomic.Pointer[accounting.CapabilityFunc]
+	share         atomic.Pointer[accounting.ShareFunc]
 	creationEpoch atomic.Pointer[CreationEpochFunc]
 
 	pinnedEpochs sync.Map
@@ -86,6 +87,22 @@ func (n *Recorder) SetCapability(lookup accounting.CapabilityFunc) {
 	if n != nil && lookup != nil {
 		n.capability.Store(&lookup)
 	}
+}
+
+func (n *Recorder) SetShare(lookup accounting.ShareFunc) {
+	if n != nil && lookup != nil {
+		n.share.Store(&lookup)
+	}
+}
+
+func (n *Recorder) hostShare(participant, model string) (accounting.HostShare, bool) {
+	if n == nil {
+		return accounting.HostShare{}, false
+	}
+	if lookup := n.share.Load(); lookup != nil {
+		return (*lookup)(participant, model)
+	}
+	return accounting.HostShare{}, false
 }
 
 // SetCreationEpoch wires the resolver the sweep stamps escrows with. See README.md, "The judgements it does make".
@@ -149,7 +166,7 @@ func Open(settings config.NonceAccounting, storageDir string, epochs EpochSource
 	ledger.service = service
 	ledger.listener = &http.Server{
 		Addr:              fmt.Sprintf(":%d", settings.Port),
-		Handler:           accounting.NewHandler(service.Book, ledger.currentEpoch, ledger.hostCapability),
+		Handler:           accounting.NewHandler(service.Book, ledger.currentEpoch, ledger.hostCapability, ledger.hostShare),
 		ReadHeaderTimeout: nonceAccountingReadHeaderTimeout,
 		ReadTimeout:       nonceAccountingReadTimeout,
 		WriteTimeout:      nonceAccountingWriteTimeout,

@@ -1,6 +1,11 @@
 package engine
 
-import "sync"
+import (
+	"sync"
+
+	"devshard/cmd/gateway/perf"
+	"devshard/cmd/gateway/share"
+)
 
 type heldWinnerKey struct {
 	escrowID string
@@ -56,6 +61,7 @@ func (e *Engine) recordSample(outcome RaceOutcome, attempt AttemptOutcome, regis
 func (e *Engine) recordJudgedSample(outcome RaceOutcome, attempt AttemptOutcome) {
 	if sample, exemption := outcome.Sample(attempt); exemption == SampleRecorded {
 		e.deps.Perf.RecordSample(sample)
+		e.countShare(sample)
 	}
 }
 
@@ -80,4 +86,16 @@ func (e *Engine) decideWinner(winner heldWinner, finished bool) {
 			FinishLag: e.settles.now().Sub(winner.attempt.Completed),
 		})
 	}
+}
+
+// countShare books a recorded sample as served or failed in the share ledger; an attempt the gateway cancelled is exempt from sampling and counts in neither.
+func (e *Engine) countShare(sample perf.Sample) {
+	if e.deps.Shares == nil {
+		return
+	}
+	kind := share.Failed
+	if sample.Responsive {
+		kind = share.Served
+	}
+	e.deps.Shares.Count(sample.Model, sample.ParticipantKey, kind)
 }

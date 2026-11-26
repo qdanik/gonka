@@ -9,6 +9,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/limits"
+	"devshard/cmd/gateway/share"
 	"devshard/types"
 )
 
@@ -37,6 +38,7 @@ type dispatcherDeps struct {
 	escalationHold      func() (func(), bool)
 	observer            dispatchObserver
 	shadow              ShadowProber
+	shares              *share.Ledger
 	now                 func() time.Time
 	matchWait           func() time.Duration
 	maxConsecutiveBurns func() int64

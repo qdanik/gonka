@@ -47,6 +47,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			escalationHold:      escrow.EscalationHold,
 			observer:            s.observer,
 			shadow:              s.shadow,
+			shares:              s.shares,
 			now:                 s.now,
 			matchWait:           func() time.Duration { return s.matchWait(escrow.Model) },
 			maxConsecutiveBurns: func() int64 { return s.maxConsecutiveBurns(escrow.Model) },

@@ -1,5 +1,7 @@
 package scheduler
 
+import "devshard/cmd/gateway/share"
+
 // GhostKind labels why a nonce was burned as a silent ghost probe instead of served.
 type GhostKind int
 
@@ -15,6 +17,17 @@ const (
 	ghostPrepareFailed
 	ghostAbsentFromChain
 )
+
+// shareKind is the share-ledger count a burn of this kind books besides the assignment; false for a nonce no host load or host state explains.
+func (k GhostKind) shareKind() (share.Kind, bool) {
+	switch k {
+	case ghostWindowFull, ghostCutOff, ghostEjected:
+		return share.Passed, true
+	case ghostPoC, ghostUntrusted, ghostStateDiverged, ghostExclude, ghostAbsentFromChain:
+		return share.Excused, true
+	}
+	return 0, false
+}
 
 func (k GhostKind) reason() string {
 	switch k {

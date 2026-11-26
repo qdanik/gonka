@@ -2,6 +2,7 @@ package limits
 
 import (
 	"cmp"
+	"math"
 	"slices"
 	"time"
 
@@ -80,4 +81,24 @@ func (l *ParticipantLimiter) Snapshot() []HostWindow {
 		return cmp.Or(cmp.Compare(first.Participant, second.Participant), cmp.Compare(first.Model, second.Model))
 	})
 	return windows
+}
+
+// RequestRoom is how many requests at full price the host's two windows admit now: the lower of the free input and output windows over their steps. A host with no window has no limit, and a cut-off host has none to spare.
+func (l *ParticipantLimiter) RequestRoom(participant, model string) float64 {
+	if l == nil {
+		return math.Inf(1)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	state, tracked := l.states[key{participant: participant, model: model}]
+	if !tracked || state.bounds.Input.Step <= 0 || state.bounds.Output.Step <= 0 {
+		return math.Inf(1)
+	}
+	if cutoffState(state, l.now()) == CutoffOpen {
+		return 0
+	}
+	input := float64(max(state.input.tokens-float64(state.input.inflight), 0)) / float64(state.bounds.Input.Step)
+	output := float64(max(state.output.tokens-float64(state.output.inflight), 0)) / float64(state.bounds.Output.Step)
+	return math.Floor(math.Min(input, output))
 }

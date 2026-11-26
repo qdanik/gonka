@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/share"
 )
 
 // idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. See routing.md, "Idle dispatchers are reaped".
@@ -23,6 +24,9 @@ type Deps struct {
 	Config            *config.Holder
 	Observer          dispatchObserver
 	Shadow            ShadowProber
+	Shares            *share.Ledger
+	Weights           func(participant, model string) float64
+	Rooms             func(participant, model string) float64
 	Now               func() time.Time
 	OnEscrowExhausted func(escrowID string, reason ExhaustionReason)
 	OnReserveTaken    func(escrowID string)
@@ -39,6 +43,10 @@ type Scheduler struct {
 	settings          *config.Holder
 	observer          dispatchObserver
 	shadow            ShadowProber
+	shares            *share.Ledger
+	weights           func(participant, model string) float64
+	rooms             func(participant, model string) float64
+	loads             loadTables
 	now               func() time.Time
 	newTimer          func(time.Duration) (<-chan time.Time, func())
 	onEscrowExhausted func(escrowID string, reason ExhaustionReason)
@@ -77,6 +85,11 @@ func NewScheduler(deps Deps) (*Scheduler, error) {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
+	if deps.Shares == nil {
+		deps.Shares = share.New(deps.Now, func(model string) time.Duration {
+			return time.Duration(deps.Config.Load().For(model).Perf.EWMAHalfLifeSeconds) * time.Second
+		})
+	}
 	return &Scheduler{
 		escrows:           deps.Escrows,
 		capacity:          deps.Capacity,
@@ -86,6 +99,9 @@ func NewScheduler(deps Deps) (*Scheduler, error) {
 		settings:          deps.Config,
 		observer:          deps.Observer,
 		shadow:            deps.Shadow,
+		shares:            deps.Shares,
+		weights:           deps.Weights,
+		rooms:             deps.Rooms,
 		now:               deps.Now,
 		onEscrowExhausted: deps.OnEscrowExhausted,
 		onReserveTaken:    deps.OnReserveTaken,

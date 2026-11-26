@@ -18,6 +18,10 @@ type hostReset interface {
 	ResetHostStats() (withheld int)
 }
 
+type shareReset interface {
+	Reset()
+}
+
 type lookupReset interface {
 	ResetLookupRefusals()
 }
@@ -32,6 +36,7 @@ type epochBoundaryReset struct {
 	repriceWindows func(chain.PhaseSnapshot)
 	windows        windowReset
 	hosts          hostReset
+	shares         shareReset
 	lookups        lookupReset
 	narrator       hostStatsResetNarrator
 }
@@ -43,6 +48,9 @@ func (r *epochBoundaryReset) observe(snapshot chain.PhaseSnapshot) {
 	}
 	windowPairs, cutOff := r.windows.ResetAll()
 	withheld := r.hosts.ResetHostStats()
+	if r.shares != nil {
+		r.shares.Reset()
+	}
 	r.lookups.ResetLookupRefusals()
 	r.narrator.HostStatsReset(snapshot.EffectiveEpochIndex, windowPairs, withheld, cutOff)
 }
@@ -58,12 +66,12 @@ func (r *epochBoundaryReset) crossed(epoch uint64) bool {
 	return previous != chain.EpochIndexUnknown
 }
 
-func subscribeEpochBoundaryReset(observer *chain.PhaseObserver, participants *limits.ParticipantLimiter, hosts *perf.Tracker, races *engine.Engine, events *journal.Journal) {
+func subscribeEpochBoundaryReset(observer *chain.PhaseObserver, participants *limits.ParticipantLimiter, hosts *perf.Tracker, shares shareReset, races *engine.Engine, events *journal.Journal) {
 	observer.Subscribe((&epochBoundaryReset{
 		repriceWindows: func(snapshot chain.PhaseSnapshot) {
 			participants.ObserveModels(contextWindowsOf(snapshot))
 			participants.ObserveWeights(participantWeightsOf(snapshot))
 		},
-		windows: participants, hosts: hosts, lookups: races, narrator: events,
+		windows: participants, hosts: hosts, shares: shares, lookups: races, narrator: events,
 	}).observe)
 }

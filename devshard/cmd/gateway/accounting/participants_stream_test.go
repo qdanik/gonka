@@ -29,6 +29,8 @@ func fillNonZero(value reflect.Value, seed *int) {
 		value.SetInt(int64(*seed))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		value.SetUint(uint64(*seed))
+	case reflect.Float32, reflect.Float64:
+		value.SetFloat(float64(*seed) + 0.5)
 	case reflect.Pointer:
 		value.Set(reflect.New(value.Type().Elem()))
 		fillNonZero(value.Elem(), seed)

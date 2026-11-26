@@ -14,6 +14,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/limits"
+	"devshard/cmd/gateway/share"
 	"devshard/types"
 )
 
@@ -392,6 +393,7 @@ type harnessConfig struct {
 	retirementReserve   uint64
 	model               string
 	settings            *config.Config
+	shares              *share.Ledger
 }
 
 func (cfg harnessConfig) modelOrDefault() string { return cmp.Or(cfg.model, modelA) }
@@ -443,6 +445,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		escrowID:   escrowA,
 		model:      cfg.modelOrDefault(),
 		shadow:     cfg.prober,
+		shares:     cfg.shares,
 		session:    session,
 		snapshots:  snapshots,
 		predicates: cfg.predicates,

@@ -14,6 +14,7 @@ import (
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/shadow"
+	"devshard/cmd/gateway/share"
 	"devshard/cmd/gateway/warmup"
 	"devshard/transport"
 )
@@ -24,6 +25,7 @@ type routingDeps struct {
 	Capacity     *limits.Capacity
 	Participants *limits.ParticipantLimiter
 	Hosts        *perf.Tracker
+	Shares       *share.Ledger
 	Snapshots    *chain.PhaseObserver
 	Config       *config.Holder
 	Depletion    *depletionNotice
@@ -75,6 +77,9 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Capacity:          deps.Capacity,
 		Limiter:           deps.Participants,
 		Perf:              deps.Hosts,
+		Shares:            deps.Shares,
+		Weights:           deps.Capacity.ParticipantWeight,
+		Rooms:             deps.Participants.RequestRoom,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
 		Observer:          tracedDispatches{recorder: deps.Dispatches, steps: deps.Steps, events: deps.Journal, ledger: deps.Ledger},

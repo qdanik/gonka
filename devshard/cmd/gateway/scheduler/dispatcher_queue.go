@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"devshard/cmd/gateway/share"
 )
 
 type armedTimer struct {
@@ -130,6 +132,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 				d.recordExcludedServe(offered.taken.participant)
 			}
 			if d.handOff(outcome.waiter, offered.taken, prepared) {
+				d.count(offered.taken.participant, share.Assigned, share.Offered)
 				if offered.forced {
 					d.recordForcedSend(offered.taken.participant, d.burnsInARow)
 				}
@@ -145,6 +148,9 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			}
 			chargeBurn(offered.chargedWaiter)
 			d.recordGhost(burned)
+			if !avail.shadowMember(burned.Participant) {
+				d.countBurn(burned.Participant, outcome.kind)
+			}
 			offered.taken.releaseHold()
 			d.burnsInARow++
 			if d.spendBurnBudget(&burnBudget) {
@@ -206,6 +212,24 @@ func (d *dispatcher) spendBurnBudget(budget *int) (tripped bool) {
 	d.recordBudgetTrip()
 	d.failWaiting(ErrNoAvailableHost)
 	return true
+}
+
+// countBurn books a burn in the share ledger: a load block is passed, a block that is not the host's load is excused, and a nonce no request was waiting for is only assigned.
+func (d *dispatcher) countBurn(participant string, kind GhostKind) {
+	if counted, ok := kind.shareKind(); ok {
+		d.count(participant, share.Assigned, share.Offered, counted)
+		return
+	}
+	d.count(participant, share.Assigned)
+}
+
+func (d *dispatcher) count(participant string, kinds ...share.Kind) {
+	if d.shares == nil {
+		return
+	}
+	for _, kind := range kinds {
+		d.shares.Count(d.model, participant, kind)
+	}
 }
 
 func (d *dispatcher) burnSpentNonce(offered offer, spent *SpentNonceError) {
@@ -350,5 +374,6 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 		Nonce: prepared.Nonce(), Participant: taken.participant,
 		Reason: ghostAbandoned.reason(), RequestID: requestIDOf(served),
 	})
+	d.count(taken.participant, share.Assigned)
 	return false
 }

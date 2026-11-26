@@ -300,7 +300,7 @@ func BenchmarkEvents(b *testing.B) {
 
 // BenchmarkServeParticipants times the whole participants route: query, findings and JSON encoding.
 func BenchmarkServeParticipants(b *testing.B) {
-	handler := NewHandler(benchBook(b), func(context.Context) (uint64, error) { return 41, nil }, nil)
+	handler := NewHandler(benchBook(b), func(context.Context) (uint64, error) { return 41, nil }, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/epochs/41/participants", nil)
 	b.ReportAllocs()
 	for b.Loop() {
