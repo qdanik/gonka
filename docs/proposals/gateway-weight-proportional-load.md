@@ -1,8 +1,8 @@
-# Gateway v6: weight-proportional load, no forgiveness for an overloaded host
+# Gateway v6: host load mode (off, weight, balance)
 
-Status: concept, no code. Base: branch `devshard/gateway/v6.0.0` at `f2369877`. Every file:line below was read at that commit. A statement marked (inferred) follows from the code plus the numbers but was not observed directly.
+Status: concept, no code. Base: branch `devshard/gateway/v6.0.0` at `f2369877`. Every file and line below was read at that commit. A statement marked (inferred) follows from the code plus the numbers but was not observed directly.
 
-## 1. The question
+## 1. The problem
 
 Two participants of one model in one epoch, seen from one gateway over 32 escrows:
 
@@ -18,194 +18,238 @@ Two participants of one model in one epoch, seen from one gateway over 32 escrow
 | inferences on chain | 56,066 | 21,675 |
 | valid on chain | 55,950 (99.8%) | 21,001 (96.9%) |
 
-A and B have near-equal weight, A draws 2.35 times the nonces, two thirds of A's nonces are ghosts, and A still shows 1% missed. The goal is a gateway that loads each host in proportion to its weight and does not absorb a host's overload at no cost to that host.
-
-What would settle the explanation: the code paths that bind a nonce to a host, that burn it, and that settle it on chain. All three were read and they settle the main point. What would settle the remaining numbers: A's and B's ghost counts by reason, the per-escrow nonce totals, and the model group's weights and group size on chain. None of those is in the repository, so section 2.8 lists what stays open.
+A and B have near-equal weight, A draws 2.35 times the nonces, two thirds of A's nonces are ghosts, and A still shows 1% missed. This document specifies one setting, `host_load_mode`, that decides how the gateway spreads load over hosts: `off` keeps today's behaviour, `weight` loads each host by its weight share, `balance` loads each host by its weight share scaled by how much of its offered load it serves.
 
 ## 2. What the code does today
 
 ### 2.1 A nonce names its host, and slots come from weight
 
-The executor of an inference is `group[inference_id % len(group)]` (`devshard/state/machine.go:1197-1198`; the gateway mirrors it in `devshard/cmd/gateway/quorum/quorum.go:7-9`). A session issues nonces in order, so the gateway never picks a host. It picks an escrow, and the escrow's next nonce is already bound to one slot.
+The executor of an inference is `group[inference_id % len(group)]` ([`devshard/state/machine.go:1197-1198`](../../devshard/state/machine.go#L1197-L1198); the gateway mirrors it in [`quorum/quorum.go:7-9`](../../devshard/cmd/gateway/quorum/quorum.go#L7-L9)). A session issues nonces in order, so the gateway never picks a host. It picks an escrow, and the escrow's next nonce is already bound to one slot.
 
-The chain fills an escrow's slots by sampling each slot independently in proportion to the model group's validation weights (`inference-chain/x/inference/keeper/msg_server_create_devshard_escrow.go:45-81`, `inference-chain/x/inference/calculations/slots.go:54-90`). Slot share equals weight share only in expectation.
+The chain fills an escrow's slots by sampling each slot in proportion to the validation weights of the model's epoch group, leaving out members under challenge ([`inference-chain/x/inference/keeper/msg_server_create_devshard_escrow.go:45-81`](../../inference-chain/x/inference/keeper/msg_server_create_devshard_escrow.go#L45-L81)). A member's weight in a model group is the sum of the proof-of-compute weights of its nodes for that model ([`inference-chain/x/inference/epochgroup/epoch_group.go:262-272`](../../inference-chain/x/inference/epochgroup/epoch_group.go#L262-L272), stored at [`inference-chain/x/inference/epochgroup/epoch_group.go:182-189`](../../inference-chain/x/inference/epochgroup/epoch_group.go#L182-L189)). Slot share equals weight share only in expectation.
 
-Within one escrow every slot receives the same number of nonces (`devshard/cmd/gateway/accounting/classify.go:100-112`, `assignedForSlot`). A host's nonce count is therefore `sum over escrows of slots(host, escrow) x laps(escrow)`. The only thing the gateway controls is how far each escrow advances.
+Within one escrow every slot receives the same number of nonces ([`accounting/classify.go:100-112`](../../devshard/cmd/gateway/accounting/classify.go#L100-L112)). A host's nonce count is therefore `sum over escrows of slots(host, escrow) x laps(escrow)`. The only thing the gateway controls is how far each escrow advances.
 
 ### 2.2 Which escrow advances
 
-A new request ranks the candidate escrows by `(expected burns, (in flight + queued) / escrow weight)`, lower first, ties by a process-wide counter (`devshard/cmd/gateway/scheduler/escrow_pick.go:152-154`, `:206-217`, `:231-244`). Expected burns is a walk from the escrow's cursor to the first slot whose host can take the request (`escrow_pick.go:351-390`). Escrow weight is the sum of the available hosts' chain weight times their slot share in that escrow (`devshard/cmd/gateway/limits/capacity.go:75-92`, `limits/weights.go:33-43`). No term in the rank compares a host's load with its weight share.
+A new request sorts the candidate escrows into money tiers (residue, funded, thin; regular escrows before reserves) and inside a tier ranks them by `(expected burns, (in flight + queued) / escrow weight)`, lower first, ties by a process-wide counter ([`scheduler/escrow_pick.go:95-106`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L95-L106), [`scheduler/escrow_pick.go:147-154`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L147-L154), [`scheduler/escrow_pick.go:175-246`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L175-L246)). Expected burns is a walk from the escrow's cursor to the first slot whose host can take the request; a shadow slot is stepped over and not counted ([`scheduler/escrow_pick.go:351-390`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L351-L390)). Escrow weight is the sum of the available hosts' weight times their slot share in that escrow ([`limits/capacity.go:75-92`](../../devshard/cmd/gateway/limits/capacity.go#L75-L92), [`limits/weights.go:33-43`](../../devshard/cmd/gateway/limits/weights.go#L33-L43)). No term compares a host's load with its weight share. A hedge or retry stays on the escrow its race started on ([`engine/pick.go:25-72`](../../devshard/cmd/gateway/engine/pick.go#L25-L72)).
 
-A hedge or retry of a race is pinned to the escrow the race started on (`devshard/cmd/gateway/engine/pick.go:25-39`, `:59-72`), so it takes that escrow's next nonces whatever hosts they name.
+### 2.3 What happens to the nonce
 
-### 2.3 What happens to the nonce: serve, burn, probe, hold
+For the bound host the dispatcher asks one ladder ([`scheduler/match.go:96-121`](../../devshard/cmd/gateway/scheduler/match.go#L96-L121)): untrusted, absent from the session, proof-of-compute required, shadow, congestion (window full or cut-off), ejected, state diverged. Every block except shadow is a burn ([`scheduler/match.go:38-51`](../../devshard/cmd/gateway/scheduler/match.go#L38-L51), [`scheduler/match.go:186-194`](../../devshard/cmd/gateway/scheduler/match.go#L186-L194)). A host that passes the ladder but whose window refuses the request's tokens is also burned ([`scheduler/dispatcher_queue.go:55-66`](../../devshard/cmd/gateway/scheduler/dispatcher_queue.go#L55-L66)). After `max_consecutive_burns` burns in a row (default 2) a full window may be crossed by an overdraft; one request stops after `max_burns_per_request` burns (default 16) ([`scheduler/dispatcher_queue.go:41-83`](../../devshard/cmd/gateway/scheduler/dispatcher_queue.go#L41-L83), [`config/defaults.go:135-139`](../../devshard/cmd/gateway/config/defaults.go#L135-L139)).
 
-For the bound host the dispatcher asks one ladder (`devshard/cmd/gateway/scheduler/match.go:96-121`): untrusted, absent from the session, proof-of-compute required, shadow, congestion (window full or cut-off), ejected, state diverged. Any block except shadow is a burn (`match.go:38-51`, `:186-194`). A host that passes the ladder but whose window refuses the request's tokens is also turned into a burn (`scheduler/dispatcher_queue.go:55-66`). After `max_consecutive_burns` burns in a row (default 2) a full window may be crossed by an overdraft; a cut-off is never crossed (`dispatcher_queue.go:48-62`, `limits/participant.go:183-204`). One request stops after `max_burns_per_request` burns (default 16) (`dispatcher_queue.go:77-83`). Defaults: `devshard/cmd/gateway/config/defaults.go:130-138`.
+The window is the gateway's measure of what a host can carry. Its floor is the concurrency the host's weight earns, `round(weight x requests_per_10000_weight / 10000)` full-size requests, 5 per 10,000 by default ([`limits/pricing.go:77-106`](../../devshard/cmd/gateway/limits/pricing.go#L77-L106), [`config/defaults.go:46-50`](../../devshard/cmd/gateway/config/defaults.go#L46-L50)): 29 for A and 27 for B. It grows by one request per good answer with no ceiling ([`limits/congestion.go:157-162`](../../devshard/cmd/gateway/limits/congestion.go#L157-L162), [`limits/window.go:47-53`](../../devshard/cmd/gateway/limits/window.go#L47-L53)) and is multiplied by 0.85, 0.70 or 0.50 on bad answers, but never below the floor ([`limits/reaction.go:121-125`](../../devshard/cmd/gateway/limits/reaction.go#L121-L125), [`limits/congestion.go:164-167`](../../devshard/cmd/gateway/limits/congestion.go#L164-L167)). So the size of the window can show that a host carries more than its weight earns and cannot show that it carries less.
 
-The three gateway-decided blocks come from the gateway's own view of the host:
+### 2.4 A ghost pays the host
 
-- Window full: each host has an input and an output token window. Its floor is the concurrency the host's chain weight earns, `round(weight x requests_per_10000_weight / 10000)` requests at full size, 5 per 10,000 by default (`limits/pricing.go:77-106`, `config/defaults.go:46-58`). At the default A earns 29 and B 27. Above the floor the window grows by one request per good answer and is multiplied by 0.85, 0.70 or 0.50 on overload, upstream fault or a missed receipt or first-token deadline (`limits/reaction.go:64-95`, `limits/congestion.go:67-87`, `config/defaults.go:59-65`).
-- Cut-off: three consecutive transport faults open it for 5 to 60 seconds with backoff (`limits/congestion.go:75-78`, `limits/reaction.go:127-146`, `config/defaults.go:66-70`).
-- Ejected: five consecutive failures, or a failure rate of 15% over at least 20 attempts, for 30 to 60 seconds, capped at half the pool (`perf/ejection.go:38-58`, `perf/tracker.go:355-364`, `config/defaults.go:101-110`).
+A burn commits a real start-inference with the prompt `.` and one output token and sends it to nobody ([`registry/session.go:18-22`](../../devshard/cmd/gateway/registry/session.go#L18-L22), [`registry/session.go:294-337`](../../devshard/cmd/gateway/registry/session.go#L294-L337), [`devshard/state/machine.go:54-55`](../../devshard/state/machine.go#L54-L55)). The record stays pending. When the escrow settles, every pending or started record is marked finished and its reservation is credited to the executor slot, with no miss ([`devshard/state/machine.go:1759-1778`](../../devshard/state/machine.go#L1759-L1778)). The chain then counts `completed = assigned per slot - missed` ([`inference-chain/x/inference/keeper/devshard_host_stats.go:89-124`](../../inference-chain/x/inference/keeper/devshard_host_stats.go#L89-L124)) and splits the fees per slot ([`inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go:101-122`](../../inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go#L101-L122)). A ghost is therefore a paid, completed, validated inference that the host never received. A miss comes only from a timeout vote on a nonce that was sent ([`engine/settle.go:234-239`](../../devshard/cmd/gateway/engine/settle.go#L234-L239) for the case no vote can pass).
 
-### 2.4 What a ghost is, and who pays for it
+### 2.5 Reading A and B
 
-A burn commits a real start-inference with the prompt `.` and `max_tokens` equal to the state machine's floor of 1, and sends it to nobody (`scheduler/dispatcher.go:307-318`, `registry/session.go:18-22`, `:294-337`, `devshard/state/machine.go:55`). The gateway records the reason and does nothing else with the nonce: no send, no timeout vote.
+Without ghosts A has 56,635 - 36,820 = 19,815 nonces and B has 24,126 - 4,658 = 19,468, a ratio of 1.02 against a weight ratio of 1.085. Real sends already follow weight, (inferred) because the window floor is weight-scaled. A holds 1.58 times B's slots, and the surplus of A's slots is burned in A's favour: 65.7% of A's on-chain inferences are ghosts, which is why its missed rate is 1%. Against the nonces that could miss, A's rate is 2.9% and B's is 12.6%.
 
-The record stays pending. When the escrow settles, every record still pending or started is marked finished and its whole reservation is credited to the executor slot, with no miss (`devshard/state/machine.go:1759-1778`, called from `devshard/state/seal.go:441`). On chain the host is paid that cost plus an equal per-slot share of the fees (`inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go:101-122`), and its epoch statistics are computed as `completed = assigned per slot - missed`, `validated = completed - invalid` (`inference-chain/x/inference/keeper/devshard_host_stats.go:89-124`, fed by `msg_server_settle_devshard_escrow.go:219-237`).
+Not explained by the code: why A has 104 slots and B 66 at near-equal weight (the group weights on chain would settle it), which burn reason dominates A's ghosts, and whether A-heavy escrows advanced more than the model's average or B-heavy ones less (per-escrow nonce totals would settle it).
 
-So a ghost is not free for the host: it is in the host's favour. The payer of the escrow pays the floor reservation and the per-nonce fee. The bound host is paid the floor reservation and credited one completed, validated inference. The gateway's own routing document says the same about the reservation (`devshard/cmd/gateway/docs/routing.md:191`); the code agrees with it. `scheduler/ghost.go:3` calls a burn a "silent ghost probe", which is inaccurate: nothing is sent.
+## 3. The setting
 
-### 2.5 What turns a nonce into a miss
+`host_load_mode` is a string with three values: `off`, `weight`, `balance`. It is a scheduler setting, it exists for the network and per model, and no boolean is added.
 
-Only a timeout or error-miss transaction that gathers more accept weight than the vote threshold increments `Missed` (`devshard/state/machine.go:1596-1659`, `:1716-1724`). The gateway raises one only for an attempt it actually sent: refused when no receipt arrived, execution when a receipt arrived but no finish, error-miss when the stream carried a provable error (`devshard/cmd/gateway/engine/settle.go:63-71`, `:109-140`). Verifiers accept a refusal only after 60 seconds and after challenging the executor with the payload, and an execution timeout only 32 minutes after the receipt (`devshard/host/timeout.go:226-277`, `:343-391`, `devshard/types/config.go:17-21`).
+### 3.1 Where it plugs in
 
-Three paths end as settled work instead of a miss: a ghost (never voted), a sent nonce whose vote is skipped or fails, and a nonce whose executor holds so many slots of the group that the other slots cannot pass the threshold (`engine/settle.go:234-239`, `quorum/quorum.go:12-24`). The last two are paid the full reservation of the real request, not the floor.
+The gateway already has one mechanism for a setting that is global with a per-model override, and the new setting uses it without changing it:
 
-### 2.6 The tracker categories, from the code
-
-The gateway ledger files every committed nonce under one disposition (`devshard/cmd/gateway/accounting/vocabulary.go:9-16`, `accounting/classify.go:30-54`):
-
-- ghost: a burn of 2.3, any reason; the reason is part of the counter key.
-- delivered: `finished_used`, `finished_unused` and `finished_usage_unknown` together, a nonce whose finish reached the gateway, winner or loser.
-- refused: `unfinished_refused`, a sent nonce with no receipt whose timeout round ended (`classify.go:87-97`).
-- in flight: sent, not yet finished or timed out.
-- missed and invalid: read from the escrow state's per-slot statistics, the same counters the chain settles (`accounting/tally.go:7-8`).
-- inferences on chain: assigned minus missed, by the chain formula of 2.4. For A, 56,635 - 569 = 56,066; for B, 24,126 - 2,451 = 21,675. Both match.
-- empty stream: a delivery reason of an attempt (`engine/vocabulary.go:157`); a finished empty stream is not voted (`engine/settle.go:93-94`).
-- no verifiers: timeout rounds that ended `vote_collection_failed` (`accounting/vocabulary.go:48-54`).
-
-### 2.7 Reading A and B
-
-Subtract the ghosts and the picture changes. A's nonces that were actually dispatched or used for service are 56,635 - 36,820 = 19,815. B's are 24,126 - 4,658 = 19,468. The ratio is 1.02 against a weight ratio of 1.085. Real sends already track weight. (inferred) This is the weight-scaled window of 2.3 at work: both hosts are filled to roughly what their weight earns, 29 and 27 concurrent requests at default settings.
-
-The 2.35 times in nonces has two factors. A holds 1.58 times the slots of B (104 against 66). And A's slots each drew 545 nonces against 366 for B's, a factor of 1.49. (inferred) The second factor is the burns themselves: every burn advances its escrow by one nonce, so an escrow with many slots of a blocked host runs through more nonces per served request, and all its slots are counted for them. A is by definition present in every escrow that is heavy in A.
-
-Of A's 56,066 inferences on chain, 36,820 (65.7%) are ghosts: nonces A never received, each settled as completed and validated, each paid the floor reservation. A's 569 misses are 2.9% of the 19,815 nonces that could have missed. B's 2,451 are 12.6% of its 19,468. A's 1% is low because two thirds of its denominator cannot miss.
-
-The asymmetry is therefore not that A is chosen more often. A holds more slots than B, the gateway's window admits about the same real load to both, and the surplus of A's slots is burned in A's favour. B, with fewer slots, has less surplus, so more of its nonces are real sends, and a slow host turns real sends into misses.
-
-### 2.8 What the code does not explain
-
-- Why A has 104 slots and B 66 at near-equal weight. The sampler is weight-proportional per slot. Either the model group's validation weights differ from the displayed weights, or this is sampling variance. The group weights on chain would settle it.
-- Which reason dominates A's ghosts (window full, cut-off, ejected, exclusion after a retry, proof-of-compute). The ledger keys ghosts by reason; the breakdown was not in the input. The design below treats the three gateway-decided reasons the same way, so it does not depend on the answer.
-- The nonces that are neither delivered, ghost, refused nor in flight: 3,851 for A and 5,565 for B. They are execution timeouts, pending classification and service nonces (timeout, heartbeat, finalize) bound to the host's slots; the split was not in the input.
-- TTFT means of 117 s and 825 s. The first-token ceiling is 30 s and the loser grace 600 s by default (`config/defaults.go:125-133`); no path read here produces a mean of 825 s, and the measurement itself was not checked.
-- Whether any escrow makes A unvoteable. It needs A to hold at least `group size - threshold` slots of one group; the group size and the threshold factor are chain parameters not read here.
-
-## 3. Design
-
-### 3.1 Rules
-
-1. A host's share is its chain weight share for the model. Slots are how the share is delivered; the gateway corrects slot deviations through the one lever it has, which escrow advances.
-2. A nonce bound to a host the gateway itself judged busy or broken is never a ghost. It is the host's work: it ends as a finish by that host or as a posted timeout vote.
-3. A nonce a host does not accept counts as consumed share, and reduces the share the gateway offers next.
-4. No new burn is introduced, and nothing is throttled by burning. Vote and verification load is bounded by pacing.
-5. One gateway version talks to one host version, so no compatibility path. Switches end in `_ENABLED`.
-
-### 3.2 Share ledger (cmd/gateway: `limits`, `accounting`)
-
-Per host and model, over a rolling window (the existing 600 s half-life, `config/defaults.go:102`) and cumulatively per epoch, reset where host state is already reset at the epoch switch (`app/epoch_reset.go:39-48`):
-
-- `offered`: nonces bound to the host while a compatible request was waiting.
-- `accepted`: of those, real sends.
-- `passed`: of those, not sent because of window full, cut-off, ejection or a spent chat budget.
-- `served`: accepted sends that finished inside their deadlines.
-- `weight_share`: the host's weight over the weight of all hosts in the model's live escrows, from the chain snapshot the limiter already reads (`limits/capacity.go:94-102`).
-- `slot_share`: its slots over all slots of those escrows (`registry/registry.go:457`).
-
-Two derived values: `health = accepted / offered`, floored at 0.25 so a host is always offered enough to recover, and `target = weight_share x health`, renormalised over the model. The ledger is published in the accounting report next to the dispositions. This part changes no behaviour and can ship first.
-
-### 3.3 Assignment: rank by passes, then by deficit (cmd/gateway: `scheduler`)
-
-`deficit(host) = target(host) x total offered - offered(host)`, clamped to plus or minus the host's weight-earned concurrency so a host returning from a cut-off catches up by at most one window. The escrow rank becomes `(passes to the first usable slot, -deficit of that slot's host, load ratio)`. The first key is today's expected burns under a new name; the walk already finds the serving slot and only has to return its host. The second key is new and replaces nothing that exists: among escrows that can serve at once, the request goes to the host furthest below its target.
-
-Effect on slots: an escrow heavy in a host that is over its target advances less, so a sampling surplus such as 104 against 66 no longer becomes load. Effect on overload: a host that accepts 35% of what it is offered has its target cut to 35% of its weight share. With weight-entitled nonces `c` and capacity `K` below it, offered settles at `sqrt(c x K)` rather than at the slot share. For A, taking `c` as 1.085 times B's nonces (about 26,200) and `K` as today's 19,815, that is about 22,800 offered and 3,000 passed instead of 36,820. This is an illustration of the fixed point, not a forecast.
-
-Fewer assigned nonces is a consequence the host feels on chain without any chain change: its completed count and its payout are both derived from assigned nonces.
-
-### 3.4 Overload rule
-
-A host is over its share and not serving it when `offered / total offered` is at or above its weight share and `passed + timed out` is a sustained fraction of `offered`. The signal is the pass itself: the gateway had work for the host on the host's own nonce and the host's window, cut-off or ejection state refused it. TTFT is not a second signal; it already feeds the window through the missed-deadline verdicts of 2.3. In-flight against share is the window floor of 2.3 and stays as it is: inside the concurrency its weight earns, a host is always sent real work.
-
-Burst and sustained: one pass changes nothing by itself; `health` is an average with a 600 s half-life and a floor of 0.25, and the deficit is clamped to one window. The rule needs at least 20 offered nonces in the window, the volume the ejection rule already uses.
-
-### 3.5 Consequence: a pass is a floor probe or an owed vote, never a ghost (cmd/gateway: `scheduler`, `shadow`, `engine`)
-
-`match` returns a probe instead of a burn for window full, cut-off and ejected. The probe is the placeholder a ghost commits today, the `.` prompt with one output token, but it is sent to the bound host through the runner that already delivers shadow probes and settles their nonces (`scheduler/shadow.go:22-48`, `shadow/runner.go:58-78`).
-
-- The host answers: it ran a one-token inference, the nonce is finished, the payer pays at most the floor, as today.
-- The host gives no receipt in 60 s: a refused vote is posted, the host takes a miss, the floor reservation returns to the escrow.
-- The host receipts and never finishes: an execution vote after 32 minutes, a miss.
-- No send is possible (cut-off open, chat budget spent): the nonce goes straight to the owed-vote queue. The verifiers challenge the host with the payload themselves, so the host still gets its chance to receipt.
-
-A probe takes no window tokens and feeds neither the window nor the failure rate; a transport fault on it counts toward the cut-off as any fault does.
-
-Burns stay for the blocks that are not the gateway's judgement of load: proof-of-compute required, outside the trust list, state diverged, absent from the session, excluded by the request, abandoned, failed prepare. The forced send, the burn cap of a request (a probe counts toward it, the payer's cost being the same) and the attempt cap are unchanged.
-
-### 3.6 Who pays
-
-| Nonce bound to host H | Today | Proposed |
+| Layer | Existing mechanism | Addition |
 |---|---|---|
-| H busy, H answers the probe | ghost: payer pays floor and fee, H paid floor and credited an inference for no work | payer pays at most floor and fee, H paid for a one-token inference it ran |
-| H busy or broken, H does not answer | same ghost, H paid and credited | H takes a miss, floor refunded, payer pays the fee of the probe nonce and of the vote nonce |
-| H over its target | escrow advances anyway, H credited | escrow advances less, H is assigned and credited fewer nonces |
-| No escrow has a usable host | 503 with no nonce spent | unchanged |
-| User | waits for the burn walk | waits for the same walk; no added attempt, no added latency |
+| Environment and admin, global | `env.Tunables`, embedded in `env.Values` and `config.Overrides` and applied once per layer by `applyTunables` ([`env/tunables.go:3-51`](../../devshard/cmd/gateway/env/tunables.go#L3-L51), [`config/overrides.go:12-33`](../../devshard/cmd/gateway/config/overrides.go#L12-L33), [`config/build.go:13-16`](../../devshard/cmd/gateway/config/build.go#L13-L16), [`config/build.go:75-76`](../../devshard/cmd/gateway/config/build.go#L75-L76), [`config/build.go:125-136`](../../devshard/cmd/gateway/config/build.go#L125-L136)) | field `HostLoadMode *string` with tag `json:"host_load_mode,omitempty"`, applied with `overrideIfSet` beside `MaxBurnsPerRequest` |
+| Environment name | `GATEWAY_*` scheduler names read in `env.Load` ([`env/env.go:289-292`](../../devshard/cmd/gateway/env/env.go#L289-L292)) | `GATEWAY_HOST_LOAD_MODE`, read with `readString` |
+| Per model | `config.ModelSettings`, one optional field per model-scoped setting, spelled with the network key ([`config/model_settings.go:11-58`](../../devshard/cmd/gateway/config/model_settings.go#L11-L58), [`config/model_settings.go:92-143`](../../devshard/cmd/gateway/config/model_settings.go#L92-L143)) | field `HostLoadMode *string`, same tag, same `overrideIfSet` into `Scheduler.HostLoadMode` |
+| Per model in the environment | `GATEWAY_MODELS_JSON`, the same document as the admin `models` key ([`config/models_build.go:72-83`](../../devshard/cmd/gateway/config/models_build.go#L72-L83)) | `{"<model id>": {"host_load_mode": "balance"}}` |
+| Snapshot | `config.Scheduler` ([`config/config.go:193-197`](../../devshard/cmd/gateway/config/config.go#L193-L197)), default in `Defaults()` ([`config/defaults.go:135-139`](../../devshard/cmd/gateway/config/defaults.go#L135-L139)) | field `HostLoadMode string`, default `off`; constants `HostLoadModeOff`, `HostLoadModeWeight`, `HostLoadModeBalance` beside the `ModelAccess` values ([`config/config.go:243-258`](../../devshard/cmd/gateway/config/config.go#L243-L258)) |
+| Reader | `Config.For(model)` returns the model's resolved copy, else the network one ([`config/model_settings.go:60-66`](../../devshard/cmd/gateway/config/model_settings.go#L60-L66)); the scheduler reads it per drain and per pick ([`scheduler/gates.go:86-101`](../../devshard/cmd/gateway/scheduler/gates.go#L86-L101)) | accessor `hostLoadMode(model)` beside `maxBurnsPerRequest`, read once per pick and once per drain |
 
-The vote nonce is the new cost: the ledger charges a fee for every service nonce except finalize (`accounting/vocabulary.go:18-27`, `accounting/tally.go:79-82`), and it uses one position under the escrow's nonce cap.
+Admin API: `GET`, `PUT` and `POST /v1/admin/settings` ([`api/routes.go:56`](../../devshard/cmd/gateway/api/routes.go#L56), [`api/admin.go:43-102`](../../devshard/cmd/gateway/api/admin.go#L43-L102)). A `PUT` is the whole document, a `POST` is a patch, and `null` clears a field or a model ([`config/overrides_merge.go:19-81`](../../devshard/cmd/gateway/config/overrides_merge.go#L19-L81)):
 
-### 3.7 Limits, per layer
+```json
+{"host_load_mode": "weight", "models": {"<model id>": {"host_load_mode": "balance"}}}
+```
 
-- Probe sends: one small chat per pass. Bounded per host by a cap on unresolved probes, default the host's weight-earned concurrency. Past the cap a pass goes to the owed-vote queue without a send.
-- Votes: paced by the existing `engine_max_concurrent_timeout_votes` (64, `config/defaults.go:132`) plus a new per-host budget per minute. Burst: a host that dies with a 20% slot share turns one nonce in five into an owed vote at once; the queue absorbs it. Sustained: votes are posted at the paced rate until the escrow settles.
-- Residue: a vote still queued when its escrow settles is not posted, and that nonce settles as a ghost does today. The ledger counts it as `pass_unvoted` per host. This is the one place forgiveness remains, it is bounded by vote capacity, and it is reported instead of hidden.
-- Nonce cap: every vote spends a nonce inside the 200-nonce margin the pick keeps below the hosts' cap (`docs/routing.md:23`). The per-host vote budget must be sized so that probes plus votes of one escrow lap fit the half of the margin reserved for timeout and validation diffs.
-- Host peer budget: a host whose advertised chat budget is spent is not probed; it goes to the vote queue, which is verifier traffic and not this gateway's chats.
+### 3.2 Precedence
 
-### 3.8 Layers
+Lowest to highest: default `off`, `GATEWAY_HOST_LOAD_MODE`, admin `host_load_mode`, `GATEWAY_MODELS_JSON` for the model, admin `models.<id>.host_load_mode`. A model's value always wins over the global one, whichever layer set either, because `resolveModels` copies the finished network configuration and lays the model's environment block and then its admin block over it ([`config/models_build.go:45-48`](../../devshard/cmd/gateway/config/models_build.go#L45-L48)). A model that sets nothing inherits the network value.
 
-- `devshard/cmd/gateway`: all of 3.2 to 3.7. `limits` and `accounting` for the ledger, `scheduler` for the rank and the probe decision, `shadow` for delivery, `engine` for vote pacing, `config` and `env` for the switches.
-- `gatewayprotocol`: no package or directory of that name exists at this commit. The wire between gateway and host is `devshard/user`, `devshard/host` and `devshard/transport`, and this design changes none of them.
-- Shared devshard packages, optional and not required by the gateway part: a refusal vote that covers a list of nonces of one executor, which would shrink the residue of 3.7; a per-slot finished counter in the host statistics.
-- Chain, out of the gateway's reach: the epoch statistics count `assigned - missed` as completed (`devshard_host_stats.go:95`), so a probe the host answers, and any residue, still count as inferences. Counting finished work needs that formula and the settlement payload to change. A cap on one validator's slots per group in the sampler would bound both the slot surplus and unvoteable groups. Lowering the execution timeout is a governance parameter and is the only way a host that answers slowly, but answers, takes a miss.
+### 3.3 Validation
 
-### 3.9 Switches
+- A value other than the three is refused in `validateScheduler`, beside the burn limits ([`config/validate.go:383-391`](../../devshard/cmd/gateway/config/validate.go#L383-L391)), with `host_load_mode: "<value>" is not off, weight or balance`, the wording `access` uses ([`config/validate.go:237-239`](../../devshard/cmd/gateway/config/validate.go#L237-L239)). The spelling is exact and lower-case in every layer. An empty string is refused; `null` is how a value is cleared.
+- For a model the same rule runs on the model's resolved copy and the problem is prefixed `models[<id>].` ([`config/models_build.go:45-53`](../../devshard/cmd/gateway/config/models_build.go#L45-L53)).
+- An admin write with a bad value is answered 400, nothing is stored and the running configuration stays, because `Reconfigure` builds and validates before it saves and swaps ([`app/operations.go:305-327`](../../devshard/cmd/gateway/app/operations.go#L305-L327)).
+- A misspelt key is a 400 on an admin write ([`config/overrides.go:42-51`](../../devshard/cmd/gateway/config/overrides.go#L42-L51)) and an error in `GATEWAY_MODELS_JSON` ([`config/models_build.go:76-80`](../../devshard/cmd/gateway/config/models_build.go#L76-L80)). The read-back of stored settings accepts unknown keys ([`config/overrides.go:53-60`](../../devshard/cmd/gateway/config/overrides.go#L53-L60)), so a build without this setting that reads a stored `host_load_mode` ignores it and runs as `off`.
+- `GATEWAY_HOST_LOAD_MODE` follows the strict grammar of the other `GATEWAY_*` scheduler variables: a bad value fails `Build`.
 
-`GATEWAY_SHARE_LEDGER_ENABLED`, `GATEWAY_SHARE_DEFICIT_PICK_ENABLED`, `GATEWAY_BUSY_PROBE_ENABLED`, each with a settings key read per pick or per drain as `max_burns_per_request` is, all off by default until the harness run of section 5 passes. Tunables: `share_health_floor` (0.25), `busy_probe_max_unresolved_per_host` (0 means weight-earned concurrency), `busy_vote_budget_per_host_per_minute`.
+### 3.4 Hot reload
 
-## 4. Alternatives rejected
+An admin write publishes a new snapshot through `Holder.Swap` ([`config/holder.go:22-37`](../../devshard/cmd/gateway/config/holder.go#L22-L37)). The scheduler reads the mode from the snapshot at each pick and each drain, so a change reaches running escrows without a restart; a drain in progress finishes under the mode it read. Probes and owed votes that were already committed are finished under any mode. The share ledger keeps counting across a mode change. An environment change needs a restart, as for every variable.
 
-- Keep the ghost and post a refused vote on each. It reaches the same miss, but every pass costs a vote round across the group instead of one send, and the vote load is unbounded without the same pacing.
-- Send the real request over the full window and let the host drown. The cost lands on the user (a slow attempt, one of two attempts spent) and on the payer (a late loser is paid in full, a timed-out one locks its reservation for 32 minutes). A slow host is paid more than under a ghost.
-- Park the escrow until the host has room, never pass. Nonces are sequential, so every escrow stalls behind its slowest high-share host and the model's throughput falls to that host's pace divided by its slot share.
-- Narrow the host's window below its weight floor when it is overloaded. Under today's ladder a narrower window is more burns, which pays the host more.
-- Take the host off the trust list. Every nonce on it becomes a burn, the largest forgiveness available.
-- Retire and recreate escrows until the slot layout matches weight. Each creation costs chain fees and locks funds, and the next sample deviates again.
+## 4. Shared by `weight` and `balance`
 
-## 5. Measurements
+### 4.1 Which weight
 
-Before the change, to close 2.8: A's and B's ghosts by reason, nonces per escrow against A's slot count per escrow, and the model group's weights.
+`weight(h)` is `Capacity.ParticipantWeight(h, model)` ([`limits/capacity.go:94-102`](../../devshard/cmd/gateway/limits/capacity.go#L94-L102)): the lower of the full and the current per-model weight in the chain snapshot. The full per-model weight is the sum of the proof-of-compute weights of the host's nodes for that model ([`chain/participants_parse.go:162-194`](../../devshard/cmd/gateway/chain/participants_parse.go#L162-L194)), which is the same sum the chain stores as the member's validation weight in the model group and samples slots from (2.1). Reasons:
 
-Acceptance, same model and a comparable epoch, switches on:
+- It is the weight the chain used to hand out the slots, so the gateway corrects sampling deviation toward the sampler's own expectation.
+- It is per model. The network-wide epoch weight sums a host's nodes over all models and would let weight earned on one model buy load on another.
+- During a proof-of-compute phase the current view counts only preserved nodes, so a host's target follows the part of its weight that is serving, and a host with no preserved node has weight 0.
+- It is the number the window floor is already priced from ([`app/capacity.go:38-54`](../../devshard/cmd/gateway/app/capacity.go#L38-L54)), so share and window agree.
 
-- Ghosts with reason window full, cut-off or ejected: zero for every host.
-- Offered nonces per host within 10% of weight share over the epoch where the slot layout allows it; for A and B a ratio near 1.085 instead of 2.35.
-- A's passes fall by an order of magnitude from 36,820, and each is filed as probe finished, probe missed or `pass_unvoted`. No nonce of A is pending at settlement for a gateway-decided reason.
-- A's missed count rises exactly by its unanswered probes. If A answers every probe its missed rate stays near today's, and the report shows why: `accepted / offered` and `served / accepted` per host.
-- B's sends, misses and miss rate do not move, because the paths that produced them are untouched.
-- Payer cost per served request does not rise by more than the vote fees; p50 and p95 TTFT of the model do not rise.
-- `pass_unvoted` is a small fraction of passes; if not, the vote budget or a list vote is the next step.
+`weight_share(h) = weight(h) / sum of weight(k)`, over the non-shadow hosts that hold at least one slot in an escrow of the model that accepts requests.
 
-Reproduction of today's A and B, to be written as failing-then-passing tests:
+### 4.2 Share ledger
 
-- Scenario test in `devshard/cmd/gateway/scenarios`, which runs the composed gateway on fake time against a fake chain and real in-process hosts (`scenarios/README.md:3`). Two hosts of equal weight, the fake chain giving A 13 of 64 slots and B 8 across four 16-slot escrows. A answers fast but holds a fixed concurrency; B takes minutes to its first token. Assert today: more than half of A's nonces are ghosts, the settled host statistics show them as completed with no miss, A's nonces per slot exceed B's, real sends of A and B are within 10%. Assert after: the acceptance list above.
-- Scheduler unit tests beside `burn_forecast_test.go` and `shadow_test.go`: the rank prefers the cursor host with the larger deficit; a full window, a cut-off and an ejection each yield a probe and no ghost; the forecast equals the passes the drain makes.
-- Load harness in `devshard/testenv/loadtest`: a scenario with one capped host and one slow host and the existing `max_ghost_rate` assertion (`loadtest/scenario.go:261`). Whether the harness can set per-host weights and slot layouts was not checked.
+Per host and model, as decayed counts with the model's `perf_ewma_halflife_seconds` (600 s, [`config/defaults.go:101-110`](../../devshard/cmd/gateway/config/defaults.go#L101-L110)) and as epoch totals for reporting. Both are reset where host state is reset at the epoch boundary ([`app/epoch_reset.go:39-48`](../../devshard/cmd/gateway/app/epoch_reset.go#L39-L48)).
 
-## 6. Adjacent leads, not pursued
+- `assigned`: every nonce bound to one of the host's slots, service nonces included.
+- `offered`: nonces the drain bound to the host while a request was waiting. It is the sum of the next four plus the sends still in flight.
+- `served`: sent and finished inside the request's deadlines.
+- `failed`: sent and ended in a refusal, a timeout or a transport fault. An attempt the gateway cancelled itself is counted in neither.
+- `passed`: not sent because the window was full, the cut-off was open, the host was ejected or its chat budget was spent.
+- `excused`: not sent for a reason that is not the host's load: proof-of-compute required, outside the trust list, absent from the session, state diverged, excluded by the request.
+- `weight_share` (4.1) and `slot_share`, the host's slots over all slots of the same escrows.
 
-- Settlement waives all devshard misses of a participant with an active challenge (`msg_server_settle_devshard_escrow.go:227-228`, marked TODO).
-- Fees are split equally per slot whatever the slot did (`msg_server_settle_devshard_escrow.go:101-122`).
-- A sent nonce whose vote is skipped as unvoteable settles at the full reservation of the request (2.5).
-- B performed no validations in the epoch while A performed 3,344.
+The ledger counts in every mode, `off` included, because it changes no routing and is the only way to see target against actual before a mode is switched on.
+
+### 4.3 A pass is a one-token probe or an owed vote, never a ghost
+
+Under `weight` and `balance`, a nonce the gateway does not send because of its own judgement of the host (window full, cut-off, ejected, chat budget spent) is a pass. A pass commits the placeholder a ghost commits today, and the committed nonce is then delivered:
+
+- `Advance` already returns a prepared nonce for a ghost ([`registry/session.go:294-337`](../../devshard/cmd/gateway/registry/session.go#L294-L337)). The probe runner's `Probe` needs only that prepared nonce and its params, sends on its own goroutine, and settles a failed send with a refused vote, or an execution vote when a receipt arrived ([`shadow/runner.go:78-138`](../../devshard/cmd/gateway/shadow/runner.go#L78-L138), [`warmup/settle.go:22-71`](../../devshard/cmd/gateway/warmup/settle.go#L22-L71)). A pass reuses this delivery with the placeholder as params.
+- It differs from a shadow probe in four ways. It carries the `.` prompt and one token, not a repeated client body. It is bounded by the receipt timeout and the first-token ceiling instead of the attempt's hard timeout. It is filed under its own terminal `busy_probe`. It is capped per host, where the shadow runner starts one goroutine per probe with no cap ([`shadow/runner.go:84-90`](../../devshard/cmd/gateway/shadow/runner.go#L84-L90)).
+
+Outcomes: the host answers and the nonce is a finished one-token inference; no receipt in 60 s and a refused vote gives the host a miss and returns the reservation; a receipt and no finish and an execution vote gives a miss after the execution timeout ([`devshard/types/config.go:17-21`](../../devshard/types/config.go#L17-L21)); no send is possible (cut-off open, chat budget spent, probe cap reached) and the nonce goes straight to the owed-vote queue, where the verifiers challenge the host themselves.
+
+A probe takes no window tokens and feeds neither the window nor the failure rate; a transport fault on it counts toward the cut-off as any fault does. A pass counts toward `max_consecutive_burns` and `max_burns_per_request` as a shadow probe already counts toward the first ([`scheduler/dispatcher_queue.go:153-158`](../../devshard/cmd/gateway/scheduler/dispatcher_queue.go#L153-L158)), so the forced send and the 503 at the cap behave as today.
+
+Burns stay, in every mode, for blocks that are not the gateway's judgement of load: proof-of-compute required, outside the trust list, state diverged, absent from the session, excluded by the request, abandoned, failed prepare.
+
+### 4.4 Limits on passes
+
+- Probes in flight per host: at most the host's weight-earned concurrency (29 for A). Above it a pass is an owed vote with no send.
+- Vote rounds: the existing pacer, 10 rounds a second with a burst of 20 ([`warmup/pace.go:10-42`](../../devshard/cmd/gateway/warmup/pace.go#L10-L42)). The pacer starts a round at once when it would wait more than two minutes, so it is not a hard bound by itself.
+- Hard bound, at the pick: an escrow carries at most 100 unresolved passes (probes in flight plus votes not yet posted), half of the 200-nonce margin the pick keeps under the nonce cap ([`scheduler/escrow_pick.go:17`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L17), [`scheduler/escrow_pick.go:397-426`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L397-L426)), so that the vote of every unresolved pass still fits under the cap. At the bound, a walk that needs another pass on that escrow is forecast unusable; the request takes another escrow, or is answered overloaded with no nonce spent when none is left. The starting value is to be confirmed by the harness run of section 9.
+- Residue: a pass still unresolved when its escrow settles settles as a ghost does today. The ledger counts it as `pass_unvoted` per host. The gateway never chooses this outcome; it is bounded by 100 per escrow and it is reported.
+
+## 5. The modes
+
+### 5.1 `off`
+
+Nothing changes. The rank is `(expected burns, load)`, a busy host's nonce is a ghost, the payer pays the floor reservation and the fee, and the host is paid and credited an inference. The ledger counts and reports what `weight` would target.
+
+### 5.2 `weight`
+
+Target: `target(h) = weight_share(h)`.
+
+Selection. For each host `surplus(h) = clamp(offered(h) - target(h) x total offered, -window(h), +window(h))`, in nonces over the decayed counts, where `window(h)` is the number of requests the host's two windows admit now (`min(input tokens / input step, output tokens / output step)`, the fields of [`limits/report.go:42-67`](../../devshard/cmd/gateway/limits/report.go#L42-L67)). The walk of the forecast ([`scheduler/escrow_pick.go:351-390`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L351-L390)) already visits every slot up to the serving one; it sums the surplus of the hosts it crosses, passes and the serving host alike, shadow slots excluded. `pickRank` becomes `(passes, walk surplus, load)` ([`scheduler/escrow_pick.go:147-154`](../../devshard/cmd/gateway/scheduler/escrow_pick.go#L147-L154)). Fewest passes first keeps the payer's cost per request lowest; among equal walks the request takes the one that touches the hosts furthest below their target, so an escrow heavy in a host above its target advances less. Money tiers, reserves, the pinned escrow of a hedge and every other rule of the pick are unchanged. Under `off` the walk surplus is 0 for every escrow and the order is today's.
+
+Unserved nonce: 4.3. The target does not move when a host passes or fails, so a host that cannot carry its share keeps being offered it and keeps answering probes or taking misses for the part it does not carry.
+
+### 5.3 `balance`
+
+Target: the weight share scaled by the part of its offers the host served.
+
+- `serve_ratio(h) = served / (served + failed + passed)` over the decayed counts. It is 1 while the denominator is below the model's `perf_failure_rate_min_volume` (20). `excused` and in-flight nonces are in neither term.
+- `capacity_factor(h) = clamp(serve_ratio(h), 0.25, 1)`.
+- `target(h) = weight_share(h) x capacity_factor(h) / sum over k of weight_share(k) x capacity_factor(k)`.
+
+Selection and the unserved nonce are as under `weight`, with this target.
+
+How the window enters. The window is what turns an offer into `served` or `passed`: an offer the window admits can be served, an offer it refuses is a pass. Its size cannot be the input, because it never falls below the weight floor (2.3) and so reads the same for every host that carries less than its weight earns. The measured serving capacity is therefore what passed through the window and finished. A host inside its window with no failures has factor 1 and its full weight share.
+
+Fixed point. A host with entitlement `c` nonces and capacity `K` below it is offered `x` with `x = c x K / x`, so `x = sqrt(c x K)`: the geometric mean of what its weight entitles it to and what it serves. It is offered less than its weight share and more than it serves, and the difference is the probing that lets the factor recover. The slope of the feedback at the fixed point is -1 and the factor is a 600 s average, so (inferred) the loop settles without a standing oscillation; the harness asserts it.
+
+Cadence. Counters move on every bind and every outcome. Shares, factors and targets are recomputed once a second per model and when the chain snapshot or the model's set of accepting escrows changes, and are published as one table that a pick reads whole. Everything resets at the epoch boundary.
+
+Bounds. The factor is in [0.25, 1], so a host is always offered enough to recover. After normalisation a target is between 0.25 and 4 times the weight share. The surplus is clamped to one window, so a host returning from a cut-off catches up by at most one window. The share is only the second key of the rank, so it never buys an extra pass.
+
+### 5.4 Who pays
+
+| Nonce bound to host H | `off` | `weight` and `balance` |
+|---|---|---|
+| H busy, answers the probe | ghost: payer pays floor and fee; H paid floor, credited an inference for no work | payer pays at most floor and fee; H paid for a one-token inference it ran |
+| H busy or broken, does not answer | same ghost | H takes a miss; floor refunded; payer pays the fee of the pass nonce and of the vote nonce |
+| H above its target | escrow advances anyway, H credited | escrow advances less; H is assigned, paid and credited fewer nonces |
+| H serves less than it is offered | no effect on its share | `weight`: none. `balance`: target falls toward `sqrt(c x K)` |
+| Escrow at its bound of unresolved passes | not applicable | no nonce spent; the request takes another escrow or a 503 |
+| Vote still queued at settlement | not applicable | settles as a ghost, counted `pass_unvoted` |
+
+The vote nonce is the new cost to the payer: one fee per unanswered pass.
+
+## 6. Burst and sustained, per layer
+
+`off` is today at every layer. For `weight` and `balance`:
+
+| Layer | Burst | Sustained |
+|---|---|---|
+| Gateway admission and its queue ([`limits/gateway.go:308`](../../devshard/cmd/gateway/limits/gateway.go#L308)) | unchanged: a probe is the gateway's own request and takes no admission slot | unchanged |
+| Escrow pick | one extra key; a pick reads one published table | escrows heavy in a host above target advance less; with every escrow at its pass bound the answer is a 503 with no nonce spent |
+| Dispatcher drain | a pass counts as a burn toward the forced send, the request cap and the drain's burn budget | unchanged caps |
+| Host window | a probe takes no tokens; real sends are admitted as today | `balance` lowers the offers to a host whose window keeps refusing; `weight` does not |
+| Cut-off and ejection | no probe is sent into an open cut-off; the pass is an owed vote | a dead host turns each crossing of its slots into an owed vote, bounded by 100 per escrow |
+| Host chat budget | a probe is one chat; a spent budget means an owed vote | the probe cap per host bounds the chats |
+| Votes | paced at 10 rounds a second, burst 20 | throughput past a dead host is bounded by the vote pace: with a slot share `s` dead, (inferred) about `10 x (1 - s) / s` requests a second per gateway, 40 at `s = 0.2` |
+| Nonce cap | each unanswered pass spends two nonces | the per-escrow bound keeps the votes under the cap |
+
+## 7. Shadow members, proof-of-compute, challenges
+
+- Shadow members are outside the share ledger and have no target: they hold no weight share, a walk steps over their slots without counting them, and their nonces are probed or held exactly as today ([`scheduler/match.go:108-110`](../../devshard/cmd/gateway/scheduler/match.go#L108-L110), [`scheduler/shadow.go:22-35`](../../devshard/cmd/gateway/scheduler/shadow.go#L22-L35)). No mode ghosts or skips a shadow nonce. The three host-state burns of a shadow host that exist today (absent, proof-of-compute, diverged; [`scheduler/match.go:101-107`](../../devshard/cmd/gateway/scheduler/match.go#L101-L107), [`scheduler/match.go:123-128`](../../devshard/cmd/gateway/scheduler/match.go#L123-L128)) are not changed by this setting.
+- Proof-of-compute: a host that owes it is blocked by the chain's rule, not by the gateway's judgement. Its nonce stays a burn in every mode and is counted `excused`, so it does not lower the host's factor. Its weight is the preserved part (4.1), so targets are shared among the hosts that are serving.
+- Epoch switch: the ledger and the targets reset with the host state. A host with no weight in the new snapshot has target 0.
+- Challenges: the chain leaves a member under challenge out of the slots of new escrows and waives its devshard misses at settlement ([`inference-chain/x/inference/keeper/msg_server_create_devshard_escrow.go:50-55`](../../inference-chain/x/inference/keeper/msg_server_create_devshard_escrow.go#L50-L55), [`inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go:227-228`](../../inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go#L227-L228)). The gateway reads no challenge state for participants at this commit. Such a host is treated as any other in the escrows it still holds slots in, and a vote owed on it costs the payer a fee and yields no miss. Skipping those votes needs the challenge state in the chain snapshot.
+
+## 8. Migration
+
+The default is `off`, and with `off` every decision is the one made today; the ledger is the only addition and it routes nothing. Suggested order: ship with `off` and read the ledger for one epoch; set `models.<id>.host_load_mode` to `weight` on one model; compare target against actual and the payer's cost per served request; then choose `weight` or `balance` per model or globally. Going back is one admin write, and a build that does not know the key ignores a stored value (3.3). One gateway version talks to one host version, so there is no compatibility path, and nothing changes on the wire or on chain.
+
+## 9. Metrics and tests
+
+Accounting report: a `share` object on the participant record beside `capability` ([`accounting/types.go:101-119`](../../devshard/cmd/gateway/accounting/types.go#L101-L119), [`accounting/capability.go:5-20`](../../devshard/cmd/gateway/accounting/capability.go#L5-L20)) with `host_load_mode`, `weight`, `weight_share`, `slot_share`, `target_share`, `offered_share` (the actual), `surplus`, `serve_ratio`, `capacity_factor`, and the counts `assigned`, `offered`, `served`, `failed`, `passed`, `excused`, `probes_answered`, `probes_missed`, `votes_owed`, `pass_unvoted`. Prometheus, in the naming of the participant metrics ([`metrics/race.go:91-152`](../../devshard/cmd/gateway/metrics/race.go#L91-L152)): `devshard_gateway_participant_target_share`, `devshard_gateway_participant_offered_share` and `devshard_gateway_participant_passes_total{outcome}` by participant and model, and `devshard_gateway_host_load_mode` by model.
+
+Unit tests, each on a fixture where every field is non-zero (weights, slots, windows, in flight, and all six ledger counts for every host), so that a formula that drops a term fails:
+
+- Config: the key round-trips globally and per model; each layer wins in the order of 3.2; `null` clears; a bad value, an empty string and a misspelt key are refused with the texts of 3.3; a stored unknown key is tolerated.
+- `off`: the rank and every decision equal today's on the same fixture; the ledger still counts.
+- `weight`: targets equal weight shares; among equal passes the rank takes the walk with the lowest surplus; a full window, an open cut-off and an ejection each yield a pass and no ghost; proof-of-compute still burns and is `excused`; a shadow slot is neither counted nor targeted; the forecast equals the passes the drain makes; the escrow bound makes a walk unusable.
+- `balance`: the factor for served, failed and passed mixes, the floor 0.25, the minimum volume, normalisation to 1, the 0.25 to 4 bounds, and convergence to `sqrt(c x K)` on a stepped clock without oscillation.
+
+Load harness in `devshard/testenv/loadtest`: one scenario, run once per mode. Hosts A and B with weights 58,036 and 53,493, 32 escrows of 16 slots with 104 slots for A and 66 for B, A fast with a fixed concurrency and B slow to its first token (node profiles bound to a host, [`devshard/testenv/loadtest/scenario.go:169-180`](../../devshard/testenv/loadtest/scenario.go#L169-L180)). The harness cannot build this today: the mock chain gives every participant one weight ([`devshard/testenv/mockchain/adminface/phase.go:66-81`](../../devshard/testenv/mockchain/adminface/phase.go#L66-L81)) and every new escrow the template's slots ([`devshard/testenv/mockchain/txexec/exec.go:117-131`](../../devshard/testenv/mockchain/txexec/exec.go#L117-L131)), and the scenario schema has no field for either ([`devshard/testenv/loadtest/scenario.go:127-180`](../../devshard/testenv/loadtest/scenario.go#L127-L180)). It needs a per-participant weight and a per-escrow slot layout first. Assertions extend the existing ones ([`devshard/testenv/loadtest/scenario.go:259-262`](../../devshard/testenv/loadtest/scenario.go#L259-L262), [`devshard/testenv/loadtest/scenario.go:289-294`](../../devshard/testenv/loadtest/scenario.go#L289-L294)): under `off`, more than half of A's nonces are ghosts and real sends of A and B are within 10%; under `weight` and `balance`, no ghost with reason window full, cut-off or ejected, `offered_share` within 10% of `target_share` for A and B, `pass_unvoted` near zero, payer cost per served request not above `off` plus vote fees, and p50 and p95 time to first token not above `off`.
+
+## 10. What each mode does to A and B
+
+An illustration under stated assumptions, not a forecast: B's offered nonces stay at 24,126 under `weight`, the slot layout lets the targets be reached, each host keeps serving what it serves today (non-ghost nonces as the upper bound of its real sends, delivered as `served`), and normalisation over the other hosts is left out.
+
+| | `off` (measured) | `weight` | `balance` |
+|---|---|---|---|
+| A offered | 56,635 | about 26,200 (1.085 x B) | about 20,400 (`sqrt(26,177 x 15,849)`) |
+| A not sent | 36,820 ghosts | about 6,400 passes, no ghost | about 600 passes, no ghost |
+| A inferences on chain | 56,066 | offered minus misses, about half of today | offered minus misses, about 36% of today |
+| A missed | 569 | 569 plus its unanswered probes | 569 plus its unanswered probes |
+| B offered | 24,126 | 24,126 | about 18,200 (`sqrt(24,126 x 13,691)`) |
+| B not sent | 4,658 ghosts | 4,658 passes, no ghost | about 0 |
+| A : B offered | 2.35 | 1.085 | about 1.12 |
+
+Under `weight` the two hosts are assigned nonces in the ratio of their weights, and the part A does not carry becomes probes it must answer or misses. Under `balance` both give up share to hosts that serve everything they are offered: A because its window refuses, B because its sends fail. B's serve ratio today is 0.65 and A's is 0.30, and A's rises once it is no longer offered its slot surplus.
+
+## 11. Alternatives rejected
+
+- Keep the ghost and post a refused vote on each. Same miss, but every pass costs a vote round across the group instead of one send.
+- Send the real request over the full window. The cost lands on the user and the payer, and a slow host is paid more than under a ghost.
+- Park the escrow until the host has room. Nonces are sequential, so every escrow stalls behind its slowest host.
+- Narrow the window below its weight floor. Under today's ladder a narrower window is more burns, which pays the host more.
+- Use the window size as the capacity input of `balance`. It never falls below the weight floor (2.3).
+- Three boolean switches. The three behaviours are not independent: a target without the pass rule still pays ghosts, and the pass rule without a target keeps the slot surplus.
+
+## 12. Limits and adjacent leads
+
+- A host that answers slowly but answers takes no miss from the gateway; that needs a shorter execution timeout, a governance parameter.
+- The chain counts `assigned - missed` as completed ([`inference-chain/x/inference/keeper/devshard_host_stats.go:95`](../../inference-chain/x/inference/keeper/devshard_host_stats.go#L95)), so an answered probe and any `pass_unvoted` residue still count as inferences. Counting finished work needs a chain change.
+- The pick cannot bring a host's share below its lowest slot share in any one escrow; a cap on one member's slots per group in the sampler would bound that.
+- Settlement waives all devshard misses of a participant with an active challenge ([`inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go:227-228`](../../inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go#L227-L228), marked TODO).
+- A vote nonce is bound to a slot by the same modulo and counts as an assigned nonce of that slot's host.
+- `scheduler/ghost.go` calls a burn a "silent ghost probe" ([`scheduler/ghost.go:3`](../../devshard/cmd/gateway/scheduler/ghost.go#L3)); nothing is sent.
