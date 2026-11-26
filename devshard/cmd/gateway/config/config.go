@@ -190,11 +190,12 @@ type Engine struct {
 	HedgeFirstTokenFloorMS       int64
 }
 
-// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, MaxConsecutiveBurns of 0 never forces a send and MaxBurnsPerRequest of 0 never caps a request. See routing.md, "The forced send" and "The burn cap of a request".
+// Scheduler groups nonce-holding tuning; HostLoadMode is one of the HostLoadMode values, see docs/proposals/gateway-weight-proportional-load.md. MatchWaitMS of 0 burns an unmatched nonce immediately, MaxConsecutiveBurns of 0 never forces a send and MaxBurnsPerRequest of 0 never caps a request. See routing.md, "The forced send" and "The burn cap of a request".
 type Scheduler struct {
 	MatchWaitMS         int64
 	MaxConsecutiveBurns int64
 	MaxBurnsPerRequest  int64
+	HostLoadMode        string
 	DispatchQueueDepth  int64
 	WarmNewEscrows      bool
 	Participants        Participants
@@ -251,6 +252,10 @@ const (
 	ModelAccessOpen      = "open"
 	ModelAccessAPIKey    = "api_key"
 	ModelAccessAdminOnly = "admin_only"
+
+	HostLoadModeOff     = "off"
+	HostLoadModeWeight  = "weight"
+	HostLoadModeBalance = "balance"
 
 	AllModels = "*"
 

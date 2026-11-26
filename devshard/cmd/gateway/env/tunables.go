@@ -13,6 +13,7 @@ type Tunables struct {
 	MatchWaitMS                            *int64   `json:"match_wait_ms,omitempty"`
 	MaxConsecutiveBurns                    *int64   `json:"max_consecutive_burns,omitempty"`
 	MaxBurnsPerRequest                     *int64   `json:"max_burns_per_request,omitempty"`
+	HostLoadMode                           *string  `json:"host_load_mode,omitempty"`
 	ForceUpstreamStreaming                 *bool    `json:"force_upstream_streaming,omitempty"`
 	LogprobsOptimization                   *bool    `json:"logprobs_optimization,omitempty"`
 	MaxBufferedResponseBytes               *int64   `json:"max_buffered_response_bytes,omitempty"`

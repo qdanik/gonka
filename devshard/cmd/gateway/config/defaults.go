@@ -136,6 +136,7 @@ func Defaults() Config {
 			MatchWaitMS:         2_000,
 			MaxConsecutiveBurns: 2,
 			MaxBurnsPerRequest:  16,
+			HostLoadMode:        HostLoadModeOff,
 			DispatchQueueDepth:  1_024,
 			WarmNewEscrows:      true,
 		},

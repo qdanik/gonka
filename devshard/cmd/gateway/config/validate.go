@@ -389,6 +389,9 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 	if c.Scheduler.MaxBurnsPerRequest < 0 || c.Scheduler.MaxBurnsPerRequest > maxBurnsPerRequest {
 		complain("max_burns_per_request: %d must be in [0, %d]", c.Scheduler.MaxBurnsPerRequest, maxBurnsPerRequest)
 	}
+	if mode := c.Scheduler.HostLoadMode; mode != HostLoadModeOff && mode != HostLoadModeWeight && mode != HostLoadModeBalance {
+		complain("host_load_mode: %q is not off, weight or balance", mode)
+	}
 	if c.Scheduler.DispatchQueueDepth < 1 || c.Scheduler.DispatchQueueDepth > maxDispatchQueueDepth {
 		complain("scheduler_dispatch_queue_depth: %d must be in [1, %d]", c.Scheduler.DispatchQueueDepth, maxDispatchQueueDepth)
 	}

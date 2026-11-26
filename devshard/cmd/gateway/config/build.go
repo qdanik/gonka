@@ -134,6 +134,7 @@ func applyTunables(configuration *Config, tunables env.Tunables) {
 	overrideIfSet(&configuration.Scheduler.MatchWaitMS, tunables.MatchWaitMS)
 	overrideIfSet(&configuration.Scheduler.MaxConsecutiveBurns, tunables.MaxConsecutiveBurns)
 	overrideIfSet(&configuration.Scheduler.MaxBurnsPerRequest, tunables.MaxBurnsPerRequest)
+	overrideIfSet(&configuration.Scheduler.HostLoadMode, tunables.HostLoadMode)
 	overrideIfSet(&configuration.Limits.ForceUpstreamStreaming, tunables.ForceUpstreamStreaming)
 	configuration.Limits.LogprobsOptimization = cmp.Or(tunables.LogprobsOptimization, configuration.Limits.LogprobsOptimization)
 	overrideIfSet(&configuration.Limits.MaxBufferedResponseBytes, tunables.MaxBufferedResponseBytes)

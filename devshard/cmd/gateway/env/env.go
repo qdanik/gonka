@@ -290,6 +290,7 @@ func Load() (Values, error) {
 	readStrictInt("GATEWAY_MATCH_WAIT_MS", &values.MatchWaitMS)
 	readStrictInt("GATEWAY_MAX_CONSECUTIVE_BURNS", &values.MaxConsecutiveBurns)
 	readStrictInt("GATEWAY_MAX_BURNS_PER_REQUEST", &values.MaxBurnsPerRequest)
+	readString("GATEWAY_HOST_LOAD_MODE", &values.HostLoadMode)
 	readStrictInt("GATEWAY_DISPATCH_QUEUE_DEPTH", &values.DispatchQueueDepth)
 	readStrictBool("GATEWAY_FORCE_UPSTREAM_STREAMING", &values.ForceUpstreamStreaming)
 	readStrictBool("GATEWAY_LOGPROBS_OPTIMIZATION_OVERRIDE", &values.LogprobsOptimization)

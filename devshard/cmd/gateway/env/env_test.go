@@ -631,3 +631,14 @@ func TestTheDispatchQueueDepthIsReadStrictly(t *testing.T) {
 		t.Fatalf("Load() with GATEWAY_DISPATCH_QUEUE_DEPTH=deep = %v, want an error naming the variable", err)
 	}
 }
+
+// Test flow:
+//  1. Set GATEWAY_HOST_LOAD_MODE to balance and call `Load`.
+//  2. Assert the value is read into the tunable as written.
+func TestTheHostLoadModeIsReadFromTheEnvironment(t *testing.T) {
+	t.Setenv("GATEWAY_HOST_LOAD_MODE", "balance")
+	values, err := Load()
+	if err != nil || values.HostLoadMode == nil || *values.HostLoadMode != "balance" {
+		t.Fatalf("Load() with GATEWAY_HOST_LOAD_MODE=balance = (%v, %v), want balance", values.HostLoadMode, err)
+	}
+}

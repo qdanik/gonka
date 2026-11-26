@@ -11,6 +11,7 @@ import (
 // ModelSettings is one model's overrides of the network-wide settings of the same name; a nil field inherits the network value. See README.md, "Per-model settings".
 type ModelSettings struct {
 	MaxBurnsPerRequest                     *int64                `json:"max_burns_per_request,omitempty"`
+	HostLoadMode                           *string               `json:"host_load_mode,omitempty"`
 	MaxConsecutiveBurns                    *int64                `json:"max_consecutive_burns,omitempty"`
 	MatchWaitMS                            *int64                `json:"match_wait_ms,omitempty"`
 	EngineReceiptTimeoutMS                 *int64                `json:"engine_receipt_timeout_ms,omitempty"`
@@ -91,6 +92,7 @@ func (c *Config) CheckStoredModels() error {
 
 func applyModelSettings(configuration *Config, settings ModelSettings) {
 	overrideIfSet(&configuration.Scheduler.MaxBurnsPerRequest, settings.MaxBurnsPerRequest)
+	overrideIfSet(&configuration.Scheduler.HostLoadMode, settings.HostLoadMode)
 	overrideIfSet(&configuration.Scheduler.MaxConsecutiveBurns, settings.MaxConsecutiveBurns)
 	overrideIfSet(&configuration.Scheduler.MatchWaitMS, settings.MatchWaitMS)
 	overrideIfSet(&configuration.Engine.ReceiptTimeoutMS, settings.EngineReceiptTimeoutMS)

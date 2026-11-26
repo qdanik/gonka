@@ -61,6 +61,7 @@ Most checks are ordinary range bounds. These are the ones that exist because a l
 - `scheduler_dispatch_queue_depth` is in [1, 65536]: each escrow's dispatcher allocates its queue up front, so the ceiling bounds that allocation; the waiters themselves are bounded by admission, since each holds its admission slot.
 - `max_consecutive_burns` is capped at 1000, which is past any real group size: a run longer than the group is a rung that never fires.
 - `max_burns_per_request` is capped at 1000 for the same reason: a cap above a request's lifetime of nonces never binds.
+- `host_load_mode` is exactly `off`, `weight` or `balance`, for the network and for each model; an empty string is refused and `null` clears it.
 - `engine_max_started_attempts_per_request` is capped at 1000 for the same reason: a cap above the host group never binds.
 - `rotation_settle_margin_blocks` below 1.
 - `tx_call_timeout_ms` must be at most `tx_poll_timeout_ms`: a single chain call outlasting the whole commit wait it is part of would make the call, not the wait, the bound.
