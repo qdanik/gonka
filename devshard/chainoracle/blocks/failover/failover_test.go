@@ -699,3 +699,60 @@ func TestHeaderAtWaitDoesNotInheritLatestBackoff(t *testing.T) {
 		})
 	}
 }
+
+type hungWaitNM struct {
+	recOracle
+	answerAfter time.Duration
+}
+
+func (w *hungWaitNM) AtWait(ctx context.Context, _ int64, _ time.Duration) (*blocks.Header, error) {
+	w.calls.Add(1)
+	select {
+	case <-time.After(w.answerAfter):
+		return nil, blocks.ErrHeaderNotFound
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type liveCtxChain struct{ recOracle }
+
+func (c *liveCtxChain) At(ctx context.Context, height int64) (*blocks.Header, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return c.recOracle.At(ctx, height)
+}
+
+// Test flow:
+// 1. Wire a NodeManager whose header lookup never answers and a direct chain read that refuses an expired context.
+// 2. Ask HeaderAtWait for a 200ms wait under a 3s caller budget.
+// 3. Expect the header from the chain read after one NodeManager call and one chain call.
+func TestHeaderAtWaitReadsTheChainWhenTheNodeManagerHangs(t *testing.T) {
+	nm := &hungWaitNM{answerAfter: time.Hour}
+	chain := &liveCtxChain{recOracle{hdr: nmHdr()}}
+	o := failover.New(nil, nm, chain)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	h, err := o.HeaderAtWait(ctx, 7, 200*time.Millisecond)
+	require.NoError(t, err, "the chain read must get time after the NodeManager wait hangs")
+	require.Equal(t, []byte{1, 2, 3, 4}, h.BlockHash)
+	require.EqualValues(t, 1, nm.calls.Load())
+	require.EqualValues(t, 1, chain.calls.Load())
+}
+
+// Test flow:
+// 1. Wire a NodeManager that answers not found just before its wait runs out.
+// 2. Ask HeaderAtWait for a 200ms wait.
+// 3. Expect a dummy header and no chain read, so a healthy answer at the end of the wait is not taken for a hang.
+func TestHeaderAtWaitKeepsAHealthyNodeManagerNotFoundAtTheEndOfTheWait(t *testing.T) {
+	nm := &hungWaitNM{answerAfter: 190 * time.Millisecond}
+	chain := &liveCtxChain{recOracle{hdr: nmHdr()}}
+	o := failover.New(nil, nm, chain)
+
+	h, err := o.HeaderAtWait(context.Background(), 7, 200*time.Millisecond)
+	require.NoError(t, err)
+	require.True(t, blocks.IsDummyHeader(h))
+	require.Zero(t, chain.calls.Load())
+}

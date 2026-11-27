@@ -49,6 +49,9 @@ const (
 	// so an upgrade is picked up without a process restart.
 	NMUnimplementedReprobe = 15 * time.Minute
 	atMissCap              = 128
+	// nmWaitGrace is how long past the server-side wait HeaderAtWait gives
+	// NodeManager before it counts as hung and the chain read takes over.
+	nmWaitGrace = 250 * time.Millisecond
 )
 
 var nmBackoffSchedule = []time.Duration{
@@ -446,8 +449,12 @@ func (o *Oracle) HeaderAtWait(ctx context.Context, height int64, wait time.Durat
 	if !skipNM {
 		var h *blocks.Header
 		var err error
+		hung := false
 		if w, ok := o.nm.(blocks.HeaderWaiter); ok && wait > 0 {
-			h, err = w.AtWait(ctx, height, wait)
+			nmCtx, cancel := context.WithTimeout(ctx, wait+nmWaitGrace)
+			h, err = w.AtWait(nmCtx, height, wait)
+			hung = nmCtx.Err() != nil && ctx.Err() == nil
+			cancel()
 		} else {
 			h, err = o.nm.At(ctx, height)
 		}
@@ -462,7 +469,7 @@ func (o *Oracle) HeaderAtWait(ctx context.Context, height int64, wait time.Durat
 		if err == nil || errors.Is(err, blocks.ErrHeaderNotFound) {
 			return blocks.DummyHeader(height), nil
 		}
-		if !permanentNMSkip(err) && !nmTransportStatus(err) {
+		if !permanentNMSkip(err) && !nmTransportStatus(err) && !hung {
 			return nil, err
 		}
 		o.noteNMOutcome(now, nil, err)
