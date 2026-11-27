@@ -323,36 +323,37 @@ func TestContainerE2E_HeightSync_BusyEscrowDischarge(t *testing.T) {
 	})
 }
 
-// TestContainerE2E_HeightSync_StaleClaimSpread is H40: after a host stops
-// acking past freshness F, its claim turns stale while the height spread keeps
-// counting it, so the alertable number does not silently shrink.
+// Test flow:
+// 1. Boot the HA pair plus a solo identity, so the solo owns its own roster slot.
+// 2. Send two chats and read the height spread once both claims are fresh.
+// 3. Stop the solo and keep chatting through the HA pair for longer than the originator freshness.
+// 4. Expect the solo's claim stale, the pair's claim fresh, and the spread no smaller than before.
 func TestContainerE2E_HeightSync_StaleClaimSpread(t *testing.T) {
 	harness.SkipUnlessEnv(t, "TESTENV_CITEST")
 	harness.RequireDocker(t)
 
-	stack, cfg, eps := harness.BootHeightSyncStack(t, "citest-hs-h40-*")
+	stack, cfg, eps := harness.BootHeightSyncHAPlusSoloStack(t, "citest-hs-h40-*")
+	solo := harness.FirstSoloHostID(t, cfg)
 	client := harness.GatewayChatClient()
 	t.Cleanup(func() {
 		if t.Failed() {
-			harness.DumpComposeLogs(t, stack, "gateway", "versiond-0", "versiond-1")
+			harness.DumpComposeLogs(t, stack, "gateway", "versiond-0", "versiond-1", solo)
 		}
 	})
 	harness.WaitStackHealthy(t, stack, eps)
 	harness.WaitGatewayChatReady(t, client, eps.GatewayHTTP, 3*time.Minute, stack)
-	postHeightSyncChat(t, cfg, eps, "citest height-sync seed tip")
+	seedHeightSyncFloor(t, cfg, eps)
 
 	escrowID := harness.GetGatewayEscrowID(t, nil, eps.GatewayHTTP)
 	before := harness.WaitHeightSyncView(t, client, eps.GatewayHTTP, escrowID, heightSyncWait, func(view harness.HeightSyncView) bool {
 		_, claimed := view.HeightSpread()
-		return claimed && view.FreshTips() >= 1
+		return claimed && view.FreshTips() >= 2
 	})
 	spreadBefore, _ := before.HeightSpread()
 
-	harness.Step(t, "stop versiond-1 so its tip goes stale past F")
-	stack.StopService(t, "versiond-1")
+	harness.Step(t, "stop "+solo+" so its tip goes stale past F")
+	stack.StopService(t, solo)
 
-	// DefaultOriginatorFreshness is 120s. Keep the live host talking so the
-	// gateway tip and the remaining claim stay fresh.
 	deadline := time.Now().Add(150 * time.Second)
 	for time.Now().Before(deadline) {
 		postHeightSyncChat(t, cfg, eps, "citest height-sync keep live tip fresh")
